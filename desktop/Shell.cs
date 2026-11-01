@@ -59,6 +59,60 @@ namespace JingqianShell
         }
     }
 
+    // ===================== 圆角按钮（统一主窗口和两个面板的观感） =====================
+    class FlatBtn : Button
+    {
+        public Color NormalBack;
+        public Color NormalFore;
+        public Color NormalBorder = Color.Transparent;
+        public int Radius = 8;
+        bool hover, pressed;
+
+        public FlatBtn(string text, Color back, Color fore)
+        {
+            Text = text;
+            NormalBack = back;
+            NormalFore = fore;
+            BackColor = back;
+            ForeColor = fore;
+            Font = Theme.Ui(9.5f, true);
+            Cursor = Cursors.Hand;
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+
+        static Color Shift(Color c, int delta)
+        {
+            return Color.FromArgb(c.A, Math.Max(0, Math.Min(255, c.R + delta)), Math.Max(0, Math.Min(255, c.G + delta)), Math.Max(0, Math.Min(255, c.B + delta)));
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { pressed = true; Invalidate(); base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { pressed = false; Invalidate(); base.OnMouseUp(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(Parent != null ? Parent.BackColor : Theme.Bg);
+            Color back = Enabled ? (pressed ? Shift(NormalBack, -18) : (hover ? Shift(NormalBack, 10) : NormalBack)) : Color.FromArgb(236, 241, 246);
+            Color fore = Enabled ? NormalFore : Theme.Dim;
+            Color border = NormalBorder;
+            if (hover && !pressed && border == Theme.Border) border = Shift(Theme.Border, -18);
+            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (GraphicsPath gp = Theme.Round(r, Dpi.X(Radius)))
+            {
+                using (SolidBrush b = new SolidBrush(back)) g.FillPath(b, gp);
+                if (border != Color.Transparent)
+                    using (Pen p = new Pen(border, 1f)) g.DrawPath(p, gp);
+            }
+            TextRenderer.DrawText(g, Text, Font, new Rectangle(0, 0, Width, Height), fore,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+        }
+    }
+
     // ===================== 配置读写（走 /api/config 中控台） =====================
     class ApiClient
     {
@@ -139,9 +193,16 @@ namespace JingqianShell
 
         public string Chat(string message, out string stats, out List<Dictionary<string, object>> trace)
         {
+            return Chat(message, null, out stats, out trace);
+        }
+
+        // 带附件（拖进输入栏的本地文件路径）；附件由服务端读，界面只传路径
+        public string Chat(string message, List<string> attachments, out string stats, out List<Dictionary<string, object>> trace)
+        {
             Dictionary<string, object> body = new Dictionary<string, object>();
             body["message"] = message;
             body["session"] = "web";
+            if (attachments != null && attachments.Count > 0) body["attachments"] = attachments;
             Dictionary<string, object> r = Post("/api/chat", body, 180000);
             stats = "";
             trace = new List<Dictionary<string, object>>();
@@ -281,17 +342,27 @@ namespace JingqianShell
             return null;
         }
     }
-
     // ===================== 消息列表（自绘气泡） =====================
     class ChatView : ScrollableControl
     {
-        // Kind: user / ai / note（工具调用小字）/ pending（正在想）
-        class Msg { public bool User; public string Text; public string Time; public string Kind; }
+        // Kind: user / ai / note（工具调用小条）/ pending（正在想）
+        class Msg { public bool User; public string Text; public string Time; public string Kind; public string Files; }
         readonly List<Msg> msgs = new List<Msg>();
         readonly Font font = Theme.Ui(10f, false);
         readonly Font meta = Theme.Ui(8f, false);
-        readonly Font noteFont = Theme.Ui(8f, false);
+        readonly Font noteFont = Theme.Ui(8.5f, false);
+        readonly Font emptyTitle = Theme.Ui(15f, true);
+        readonly Font emptyHint = Theme.Ui(9.5f, false);
+        readonly Font emptyTiny = Theme.Ui(8.5f, false);
+        public Image EmptyIcon;
         int contentHeight = 0;
+        readonly List<int[]> tops = new List<int[]>();
+
+        int Pad { get { return Dpi.X(18); } }
+        int Radius { get { return Dpi.X(13); } }
+        int LabelH { get { return Dpi.X(18); } }
+        int Gap { get { return Dpi.X(16); } }
+        int MaxBubble { get { return Math.Min(Dpi.X(420), Math.Max(Dpi.X(180), ClientSize.Width - Pad * 2 - Dpi.X(40))); } }
 
         public ChatView()
         {
@@ -303,10 +374,16 @@ namespace JingqianShell
 
         public void Add(bool user, string text)
         {
+            Add(user, text, null);
+        }
+
+        public void Add(bool user, string text, string files)
+        {
             Msg m = new Msg();
             m.User = user;
             m.Kind = user ? "user" : "ai";
             m.Text = text ?? "";
+            m.Files = files ?? "";
             m.Time = DateTime.Now.ToString("HH:mm");
             msgs.Add(m);
             Reflow();
@@ -331,7 +408,7 @@ namespace JingqianShell
             Msg m = new Msg();
             m.Kind = "pending";
             m.Text = "正在想…";
-            m.Time = DateTime.Now.ToString("HH:mm:ss");
+            m.Time = DateTime.Now.ToString("HH:mm");
             msgs.Add(m);
             Reflow();
             Invalidate();
@@ -350,7 +427,7 @@ namespace JingqianShell
 
         void ScrollToEnd()
         {
-            int h = Math.Max(0, contentHeight - ClientSize.Height + 16);
+            int h = Math.Max(0, contentHeight - ClientSize.Height + Dpi.X(18));
             // 让顶部不要出现「半截气泡」：把滚动位置对齐到某个气泡的上沿
             for (int i = 0; i < tops.Count; i++)
             {
@@ -362,7 +439,6 @@ namespace JingqianShell
 
         public void ScrollToEndPublic() { ScrollToEnd(); }
         public int Count { get { return msgs.Count; } }
-        readonly List<int[]> tops = new List<int[]>();
 
         protected override void OnResize(EventArgs e)
         {
@@ -371,27 +447,37 @@ namespace JingqianShell
             Invalidate();
         }
 
+        // 量一个气泡：宽、高（含内部附件行）
+        void Measure(Msg m, out int w, out int h)
+        {
+            if (m.Kind == "note") { w = 0; h = Dpi.X(36); return; }
+            Size sz = TextRenderer.MeasureText(m.Text.Length == 0 ? " " : m.Text, font,
+                new Size(Math.Max(Dpi.X(80), MaxBubble - Dpi.X(28)), int.MaxValue), TextFormatFlags.WordBreak);
+            int filesH = string.IsNullOrEmpty(m.Files) ? 0 : Dpi.X(20);
+            w = Math.Min(Math.Max(sz.Width + Dpi.X(28), Dpi.X(58)), MaxBubble);
+            h = sz.Height + filesH + Dpi.X(26);
+        }
+
+        int RowHeight(Msg m)
+        {
+            if (m.Kind == "note") return Dpi.X(36);
+            int w, h;
+            Measure(m, out w, out h);
+            return LabelH + h + Gap;
+        }
+
         void Reflow()
         {
-            int pad = Dpi.X(16), maxW = Math.Max(Dpi.X(160), ClientSize.Width - pad * 2 - Dpi.X(24));
-            int y = Dpi.X(12);
+            int y = Dpi.X(16);
             tops.Clear();
             foreach (Msg m in msgs)
             {
-                int top = y;
-                int h;
-                if (m.Kind == "note") h = Dpi.X(38);
-                else
-                {
-                    Size sz = TextRenderer.MeasureText(m.Text.Length == 0 ? " " : m.Text, font,
-                        new Size(Math.Min(maxW - Dpi.X(26), Dpi.X(340)), int.MaxValue), TextFormatFlags.WordBreak);
-                    h = sz.Height + Dpi.X(40);
-                }
-                tops.Add(new int[] { top, h });
+                int h = RowHeight(m);
+                tops.Add(new int[] { y, h });
                 y += h;
             }
             contentHeight = y;
-            AutoScrollMinSize = new Size(0, y + Dpi.X(10));
+            AutoScrollMinSize = new Size(0, y + Dpi.X(8));
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -399,56 +485,109 @@ namespace JingqianShell
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Theme.Bg);
-            int pad = Dpi.X(16);
-            int maxW = Math.Max(Dpi.X(160), ClientSize.Width - pad * 2 - Dpi.X(24));
+            if (msgs.Count == 0)
+            {
+                DrawEmpty(g);
+                return;
+            }
             // WinForms 的 AutoScrollPosition getter 返回负的滚动量（往下滚 = 负数），
-            // 所以要「加上」它才是内容在视口里的 y；之前用减号会把内容画到视口外，表现为消息区空白。
-            int y = Dpi.X(12) + AutoScrollPosition.Y;
+            // 所以要「加上」它才是内容在视口里的 y。
+            int y = Dpi.X(16) + AutoScrollPosition.Y;
             foreach (Msg m in msgs)
             {
                 if (m.Kind == "note")
                 {
-                    TextRenderer.DrawText(g, m.Text, noteFont,
-                        new Rectangle(pad + Dpi.X(6), y + Dpi.X(2), ClientSize.Width - pad * 2 - Dpi.X(12), Dpi.X(36)),
-                        Theme.Dim, TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
-                    y += Dpi.X(38);
+                    DrawNote(g, m, y);
+                    y += Dpi.X(36);
                     continue;
                 }
+                int bw, bh;
+                Measure(m, out bw, out bh);
+                int bubbleTop = y + LabelH;
+                if (bubbleTop + bh < 0) { y += LabelH + bh + Gap; continue; }
                 bool user = m.Kind == "user";
-                Size sz = TextRenderer.MeasureText(m.Text.Length == 0 ? " " : m.Text, font,
-                    new Size(Math.Min(maxW - Dpi.X(26), Dpi.X(340)), int.MaxValue), TextFormatFlags.WordBreak);
-                int bw = Math.Min(Math.Max(sz.Width + Dpi.X(26), Dpi.X(52)), maxW);
-                int bh = sz.Height + Dpi.X(22);
-                // 顶部不留半截气泡：被视口上沿切到的整条跳过（背景留白，不画残块）
-                if (y < 0) { y += bh + Dpi.X(24); continue; }
-                int x = user ? (ClientSize.Width - pad - bw) : (pad + Dpi.X(4));
-                Rectangle rr = new Rectangle(x, y, bw, bh);
-                using (GraphicsPath gp = Theme.Round(rr, Dpi.X(14)))
+                int x = user ? (ClientSize.Width - Pad - bw) : Pad;
+
+                // 名字和时间放气泡上面一行，比压在气泡下沿好读
+                string label = (user ? "你" : "鲸倩") + "  " + m.Time;
+                Rectangle lr = user
+                    ? new Rectangle(x + bw - Dpi.X(140), y, Dpi.X(140), LabelH)
+                    : new Rectangle(x, y, Dpi.X(140), LabelH);
+                TextRenderer.DrawText(g, label, meta, lr, Theme.Dim,
+                    (user ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+                Rectangle rr = new Rectangle(x, bubbleTop, bw, bh);
+                using (GraphicsPath gp = Theme.Round(rr, Radius))
                 {
                     using (SolidBrush fill = new SolidBrush(user ? Theme.UserBubble : Theme.AiBubble))
                         g.FillPath(fill, gp);
                     if (!user)
                         using (Pen p = new Pen(Theme.Border, 1f)) g.DrawPath(p, gp);
                 }
-                Rectangle tr = new Rectangle(x + Dpi.X(13), y + Dpi.X(11), bw - Dpi.X(26), bh - Dpi.X(22));
+                int innerX = x + Dpi.X(14);
+                int innerW = bw - Dpi.X(28);
+                int textTop = bubbleTop + Dpi.X(12);
+                if (!string.IsNullOrEmpty(m.Files))
+                {
+                    TextRenderer.DrawText(g, "附件 · " + m.Files, meta,
+                        new Rectangle(innerX, bubbleTop + Dpi.X(8), innerW, Dpi.X(18)), Theme.AccentDeep,
+                        TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                    textTop += Dpi.X(20);
+                }
+                Rectangle tr = new Rectangle(innerX, textTop, innerW, bh - (textTop - bubbleTop) - Dpi.X(12));
                 TextRenderer.DrawText(g, m.Text, font, tr, m.Kind == "pending" ? Theme.Dim : Theme.Text,
                     TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
-                if (m.Kind != "pending")
-                {
-                    TextRenderer.DrawText(g, user ? "你" : "鲸倩", meta,
-                        new Rectangle(x + (user ? bw - Dpi.X(34) : Dpi.X(2)), y + bh + Dpi.X(2), Dpi.X(60), Dpi.X(16)),
-                        Theme.Dim, TextFormatFlags.NoPadding);
-                }
-                y += bh + Dpi.X(24);
-            }
-            if (msgs.Count == 0)
-            {
-                TextRenderer.DrawText(g, "在的。说点什么吧。", Theme.Ui(10f, false),
-                    new Rectangle(pad + Dpi.X(8), Dpi.X(24), ClientSize.Width - pad * 2, Dpi.X(40)), Theme.Dim,
-                    TextFormatFlags.NoPadding);
+                y += LabelH + bh + Gap;
             }
         }
+
+        void DrawNote(Graphics g, Msg m, int y)
+        {
+            Size sz = TextRenderer.MeasureText(m.Text, noteFont,
+                new Size(Math.Max(Dpi.X(120), ClientSize.Width - Dpi.X(80)), int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+            int w = Math.Min(sz.Width + Dpi.X(26), ClientSize.Width - Dpi.X(40));
+            int h = Dpi.X(26);
+            int x = (ClientSize.Width - w) / 2;
+            Rectangle rr = new Rectangle(x, y + Dpi.X(4), w, h);
+            using (GraphicsPath gp = Theme.Round(rr, Dpi.X(9)))
+            {
+                using (SolidBrush b = new SolidBrush(Color.FromArgb(236, 243, 249))) g.FillPath(b, gp);
+            }
+            TextRenderer.DrawText(g, m.Text, noteFont, rr, Theme.Dim,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+        }
+
+        void DrawEmpty(Graphics g)
+        {
+            int cy = (int)(ClientSize.Height * 0.30);
+            int icon = Dpi.X(52);
+            Rectangle ir = new Rectangle((ClientSize.Width - icon) / 2, cy, icon, icon);
+            if (EmptyIcon != null)
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawImage(EmptyIcon, ir);
+            }
+            else
+            {
+                using (GraphicsPath gp = Theme.Round(ir, Dpi.X(16)))
+                using (SolidBrush b = new SolidBrush(Theme.UserBubble)) g.FillPath(b, gp);
+            }
+            string title = "在呢";
+            Size ts = TextRenderer.MeasureText(title, emptyTitle);
+            TextRenderer.DrawText(g, title, emptyTitle,
+                new Rectangle(0, ir.Bottom + Dpi.X(14), ClientSize.Width, ts.Height + Dpi.X(6)),
+                Theme.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+            string hint = "说点什么，或者把文件 / 图片拖进来。";
+            TextRenderer.DrawText(g, hint, emptyHint,
+                new Rectangle(0, ir.Bottom + Dpi.X(14) + ts.Height + Dpi.X(12), ClientSize.Width, Dpi.X(26)),
+                Theme.Dim, TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+            TextRenderer.DrawText(g, "回车发送 · Shift+回车换行 · 拖进来的文件会贴在输入框上方",
+                emptyTiny,
+                new Rectangle(0, ir.Bottom + Dpi.X(14) + ts.Height + Dpi.X(42), ClientSize.Width, Dpi.X(22)),
+                Color.FromArgb(164, 178, 190), TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+        }
     }
+
 
     // ===================== 顶部标题栏（拖动 + 三个按钮） =====================
     class CaptionBar : Control
@@ -543,6 +682,15 @@ namespace JingqianShell
         }
     }
 
+    // 拖进输入栏的附件（界面只记路径和名字，文件内容由服务端读）
+    class AttachItem
+    {
+        public string Path;
+        public string Name;
+        public string Kind;
+        public long Size;
+    }
+
     // ===================== 主窗口 =====================
     class MainForm : Form
     {
@@ -553,7 +701,14 @@ namespace JingqianShell
         TextBox input;
         Button sendBtn;
         Panel inputWrap;
-        Button settingsBtn;
+        Panel bottom;
+        Panel topHost;
+        Panel toolPanel;
+        Label dragHintLabel;
+        int toolBorderY;
+        FlowLayoutPanel attachBar;
+        Label inputHint;
+        readonly List<AttachItem> attachments = new List<AttachItem>();
         CaptionBar caption;
         NotifyIcon tray;
         Label statsLabel;
@@ -586,6 +741,15 @@ namespace JingqianShell
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
             if (Height > wa.Height - Dpi.X(24)) Height = wa.Height - Dpi.X(24);
             if (Width > wa.Width - Dpi.X(24)) Width = wa.Width - Dpi.X(24);
+            // UI 复查用：JQ_UI_SIZE=720x520 可以按指定逻辑尺寸开窗（截图看小窗有没有挤坏）
+            string uiSize = Environment.GetEnvironmentVariable("JQ_UI_SIZE");
+            if (!string.IsNullOrEmpty(uiSize))
+            {
+                string[] wh = uiSize.ToLower().Split('x');
+                int uw, uh;
+                if (wh.Length == 2 && int.TryParse(wh[0], out uw) && int.TryParse(wh[1], out uh))
+                    Size = new Size(Dpi.X(uw), Dpi.X(uh));
+            }
             if (Environment.GetEnvironmentVariable("JQ_SHELL_OFFSCREEN") == "1")
             {
                 StartPosition = FormStartPosition.Manual;
@@ -604,6 +768,10 @@ namespace JingqianShell
 
             BuildUi();
             BuildTray();
+
+            // 截图/验收用：JQ_UI_ATTACH=路径1;路径2 自动贴上附件（等价于拖进来）
+            string uiAttach = Environment.GetEnvironmentVariable("JQ_UI_ATTACH");
+            if (!string.IsNullOrEmpty(uiAttach)) AddAttachments(uiAttach.Split(';'));
 
             Shown += delegate
             {
@@ -677,16 +845,8 @@ namespace JingqianShell
             Resize += delegate
             {
                 ApplyRound();
-                if (inputWrap != null && sendBtn != null)
-                {
-                    int rightW = Dpi.X(78) * 2 + Dpi.X(8);   // 发送 + 设置 并排
-                    int w = Math.Max(Dpi.X(200), Width - Dpi.X(28) - rightW - Dpi.X(10));
-                    inputWrap.Width = w;
-                    if (input != null) input.Width = Math.Max(Dpi.X(120), w - Dpi.X(24));
-                    sendBtn.Left = inputWrap.Left + inputWrap.Width + Dpi.X(10);
-                    if (settingsBtn != null) settingsBtn.Left = sendBtn.Left + sendBtn.Width + Dpi.X(8);
-                    if (statsLabel != null) statsLabel.Width = Math.Max(Dpi.X(200), Width - Dpi.X(110));
-                }
+                LayoutTop();
+                LayoutBottom();
             };
             FormClosing += delegate
             {
@@ -710,8 +870,16 @@ namespace JingqianShell
 
         void BuildUi()
         {
+            // ---- 顶部容器：标题栏在最上，工具栏第二，雷达条第三 ----
+            // 以前三块都用 Dock.Top，谁最后加谁跑最上面，结果工具栏压到了标题栏上。
+            // 现在统一放一个容器里手动排版，顺序写死，不会再反。
+            topHost = new Panel();
+            topHost.Dock = DockStyle.Top;
+            topHost.Height = Dpi.X(88);
+            topHost.BackColor = Theme.Paper;
+            Controls.Add(topHost);
+
             caption = new CaptionBar();
-            caption.Dock = DockStyle.Top;
             caption.AppIcon = LoadSmallIcon();
             caption.MinClick += delegate { WindowState = FormWindowState.Minimized; };
             caption.MaxClick += delegate
@@ -720,107 +888,97 @@ namespace JingqianShell
             };
             caption.CloseClick += delegate { HideToTray(); };
             caption.MouseDown += DragWindow;
-            Controls.Add(caption);
+            topHost.Controls.Add(caption);
 
-            // 顶部一排按钮（文字，不用 emoji：老板机器上 emoji 会变方块）
-            Panel toolbar = new Panel();
-            toolbar.Dock = DockStyle.Top;
-            toolbar.Height = Dpi.X(38);
-            toolbar.BackColor = Theme.Bg;
-            toolbar.Paint += delegate (object s, PaintEventArgs e)
+            // 工具栏（文字按钮，不用 emoji——有些机器上 emoji 会变方块）
+            toolPanel = new Panel();
+            toolPanel.BackColor = Theme.Bg;
+            toolPanel.Paint += delegate (object s, PaintEventArgs e)
             {
-                using (Pen p = new Pen(Theme.Border, 1f)) e.Graphics.DrawLine(p, 0, toolbar.Height - 1, toolbar.Width, toolbar.Height - 1);
+                using (Pen p = new Pen(Theme.Border, 1f))
+                    e.Graphics.DrawLine(p, 0, toolBorderY, toolPanel.Width, toolBorderY);
             };
-            int tx = Dpi.X(10);
-            Button bNew = MakeButton("新对话", Color.White, Theme.AccentDeep);
-            bNew.FlatAppearance.BorderColor = Theme.Border;
-            bNew.FlatAppearance.BorderSize = 1;
-            bNew.SetBounds(tx, Dpi.X(6), TextWidth("新对话"), Dpi.X(26));
-            bNew.Click += delegate { chatView.Clear(); caption.StatusText = "已清空显示"; caption.Invalidate(); };
-            toolbar.Controls.Add(bNew);
-            tx += bNew.Width + Dpi.X(6);
-            Button bState = MakeButton("状态", Color.White, Theme.AccentDeep);
-            bState.FlatAppearance.BorderColor = Theme.Border;
-            bState.FlatAppearance.BorderSize = 1;
-            bState.SetBounds(tx, Dpi.X(6), TextWidth("状态"), Dpi.X(26));
-            bState.Click += delegate { ShowStatus(); };
-            toolbar.Controls.Add(bState);
-            tx += bState.Width + Dpi.X(6);
-            Button bMem = MakeButton("记忆", Color.White, Theme.AccentDeep);
-            bMem.FlatAppearance.BorderColor = Theme.Border;
-            bMem.FlatAppearance.BorderSize = 1;
-            bMem.SetBounds(tx, Dpi.X(6), TextWidth("记忆"), Dpi.X(26));
-            bMem.Click += delegate { OpenMemory(); };
-            toolbar.Controls.Add(bMem);
-            tx += bMem.Width + Dpi.X(6);
-            Button bSet = MakeButton("设置", Theme.Accent, Color.White);
-            bSet.SetBounds(tx, Dpi.X(6), TextWidth("设置"), Dpi.X(26));
-            bSet.Click += delegate { OpenSettings(); };
-            toolbar.Controls.Add(bSet);
-            tx += bSet.Width + Dpi.X(6);
-            Button bTray = MakeButton("托盘", Color.White, Theme.AccentDeep);
-            bTray.FlatAppearance.BorderColor = Theme.Border;
-            bTray.FlatAppearance.BorderSize = 1;
-            bTray.SetBounds(tx, Dpi.X(6), TextWidth("托盘"), Dpi.X(26));
-            bTray.Click += delegate { HideToTray(); };
-            toolbar.Controls.Add(bTray);
+            topHost.Controls.Add(toolPanel);
 
-            // 免费模型雷达提示条：平时藏着，发现新的免费模型才出现。
+            int tx = Dpi.X(12);
+            ToolBtn(toolPanel, ref tx, "新对话", false, delegate
+            {
+                chatView.Clear();
+                caption.StatusText = "已清空显示";
+                caption.Invalidate();
+            });
+            ToolBtn(toolPanel, ref tx, "状态", false, delegate { ShowStatus(); });
+            ToolBtn(toolPanel, ref tx, "记忆", false, delegate { OpenMemory(); });
+            ToolBtn(toolPanel, ref tx, "设置", true, delegate { OpenSettings(); });
+
+            dragHintLabel = new Label();
+            dragHintLabel.AutoSize = false;
+            dragHintLabel.TextAlign = ContentAlignment.MiddleRight;
+            dragHintLabel.ForeColor = Color.FromArgb(160, 176, 190);
+            dragHintLabel.Font = Theme.Ui(8.5f, false);
+            dragHintLabel.Text = "文件 / 图片可以直接拖进来";
+            toolPanel.Controls.Add(dragHintLabel);
+
+            // 免费模型雷达条：整条横在工具栏下面；平时藏着，发现新的免费模型才出现。
             // 只提示，不自动写密钥、不自动启用；「以后再说」= 记为已读。
             radarBar = new Panel();
             radarBar.BackColor = Color.FromArgb(255, 250, 232);
             radarBar.Visible = false;
             radarBar.Paint += delegate (object s, PaintEventArgs e)
             {
-                using (Pen p = new Pen(Theme.Border, 1f))
-                    e.Graphics.DrawRectangle(p, 0, 0, radarBar.Width - 1, radarBar.Height - 1);
+                using (Pen p = new Pen(Color.FromArgb(240, 224, 186), 1f))
+                    e.Graphics.DrawLine(p, 0, radarBar.Height - 1, radarBar.Width, radarBar.Height - 1);
             };
             radarLabel = new Label();
             radarLabel.AutoSize = false;
             radarLabel.TextAlign = ContentAlignment.MiddleLeft;
             radarLabel.ForeColor = Theme.AccentDeep;
             radarLabel.Font = Theme.Ui(9f, false);
-            radarLabel.SetBounds(Dpi.X(8), 0, Dpi.X(240), Dpi.X(26));
             radarBar.Controls.Add(radarLabel);
 
             radarGoBtn = MakeButton("去配置", Theme.Accent, Color.White);
-            radarGoBtn.SetBounds(0, 0, TextWidth("去配置"), Dpi.X(20));
+            radarGoBtn.Font = Theme.Ui(8.5f, true);
             radarGoBtn.Click += delegate { HideRadarBar(); OpenSettings(); };
             radarBar.Controls.Add(radarGoBtn);
 
             radarLaterBtn = MakeButton("以后再说", Color.White, Theme.AccentDeep);
-            radarLaterBtn.FlatAppearance.BorderColor = Theme.Border;
-            radarLaterBtn.FlatAppearance.BorderSize = 1;
-            radarLaterBtn.SetBounds(0, 0, TextWidth("以后再说"), Dpi.X(20));
+            radarLaterBtn.Font = Theme.Ui(8.5f, true);
             radarLaterBtn.Click += delegate { HideRadarBar(); AckRadar(); };
             radarBar.Controls.Add(radarLaterBtn);
 
-            toolbar.Controls.Add(radarBar);
-            toolbar.Resize += delegate { LayoutRadarBar(toolbar); };
-            Controls.Add(toolbar);
+            topHost.Controls.Add(radarBar);
 
-            Panel bottom = new Panel();
+            // ---- 底部输入区 ----
+            bottom = new Panel();
             bottom.Dock = DockStyle.Bottom;
-            bottom.Height = Dpi.X(132);
+            bottom.Height = Dpi.X(112);
             bottom.BackColor = Theme.Paper;
             bottom.Paint += delegate (object s, PaintEventArgs e)
             {
                 using (Pen p = new Pen(Theme.Border, 1f)) e.Graphics.DrawLine(p, 0, 0, bottom.Width, 0);
             };
 
+            attachBar = new FlowLayoutPanel();
+            attachBar.FlowDirection = FlowDirection.LeftToRight;
+            attachBar.WrapContents = false;
+            attachBar.AutoScroll = true;
+            attachBar.Visible = false;
+            attachBar.BackColor = Theme.Paper;
+            bottom.Controls.Add(attachBar);
+
             inputWrap = new Panel();
-            Panel inputBox = inputWrap;
-            inputBox.SetBounds(Dpi.X(14), Dpi.X(10), Dpi.X(300), Dpi.X(74));
-            inputBox.BackColor = Theme.Bg;
-            inputBox.Paint += delegate (object s, PaintEventArgs e)
+            inputWrap.BackColor = Theme.Bg;
+            inputWrap.Paint += delegate (object s, PaintEventArgs e)
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using (GraphicsPath gp = Theme.Round(new Rectangle(0, 0, inputBox.Width - 1, inputBox.Height - 1), Dpi.X(10)))
+                Color line = dropHover ? Theme.Accent : Theme.Border;
+                using (GraphicsPath gp = Theme.Round(new Rectangle(0, 0, inputWrap.Width - 1, inputWrap.Height - 1), Dpi.X(12)))
                 {
-                    using (SolidBrush b = new SolidBrush(Color.White)) e.Graphics.FillPath(b, gp);
-                    using (Pen p = new Pen(Theme.Border, 1f)) e.Graphics.DrawPath(p, gp);
+                    using (SolidBrush b = new SolidBrush(dropHover ? Color.FromArgb(246, 252, 255) : Color.White)) e.Graphics.FillPath(b, gp);
+                    using (Pen p = new Pen(line, dropHover ? 2f : 1f)) e.Graphics.DrawPath(p, gp);
                 }
             };
+            bottom.Controls.Add(inputWrap);
 
             input = new TextBox();
             input.Multiline = true;
@@ -828,8 +986,14 @@ namespace JingqianShell
             input.BackColor = Color.White;
             input.ForeColor = Theme.Text;
             input.Font = Theme.Ui(10f, false);
-            input.ScrollBars = ScrollBars.Vertical;
-            input.SetBounds(10, 9, 278, 54);
+            input.ScrollBars = ScrollBars.None;
+            input.AcceptsTab = false;
+            input.SetBounds(Dpi.X(12), Dpi.X(9), Dpi.X(280), Dpi.X(46));
+            input.TextChanged += delegate
+            {
+                SyncInputScrollbar();
+                UpdateInputHint();
+            };
             input.KeyDown += delegate (object s, KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Enter && !e.Shift && !e.Control)
@@ -838,34 +1002,37 @@ namespace JingqianShell
                     SendCurrent();
                 }
             };
-            inputBox.Controls.Add(input);
-            bottom.Controls.Add(inputBox);
+            inputWrap.Controls.Add(input);
+
+            inputHint = new Label();
+            inputHint.AutoSize = false;
+            inputHint.BackColor = Color.White;
+            inputHint.TextAlign = ContentAlignment.TopLeft;
+            inputHint.ForeColor = Color.FromArgb(170, 184, 196);
+            inputHint.Font = Theme.Ui(9.5f, false);
+            inputHint.Text = "说点什么…（回车发送，Shift+回车换行）";
+            inputHint.Cursor = Cursors.IBeam;
+            inputHint.Click += delegate { input.Focus(); };
+            inputWrap.Controls.Add(inputHint);
+            inputHint.BringToFront();
 
             sendBtn = MakeButton("发送", Theme.Accent, Color.White);
-            sendBtn.SetBounds(Dpi.X(322), Dpi.X(10), Dpi.X(78), Dpi.X(40));
+            sendBtn.Font = Theme.Ui(10f, true);
             sendBtn.Click += delegate { SendCurrent(); };
             bottom.Controls.Add(sendBtn);
-
-            settingsBtn = MakeButton("设置", Color.FromArgb(228, 240, 250), Theme.AccentDeep);
-            settingsBtn.SetBounds(Dpi.X(408), Dpi.X(10), Dpi.X(78), Dpi.X(40));
-            settingsBtn.Click += delegate { OpenSettings(); };
-            bottom.Controls.Add(settingsBtn);
 
             // 底部数据栏：tok/s · 缓存 · 上下文 · 今日调用 · 走哪家 · 时钟
             statsLabel = new Label();
             statsLabel.AutoSize = false;
             statsLabel.Text = "数据栏：连上服务后显示";
             statsLabel.ForeColor = Theme.Dim;
-            statsLabel.Font = Theme.Ui(8f, false);
-            statsLabel.SetBounds(Dpi.X(14), Dpi.X(102), Dpi.X(360), Dpi.X(20));
+            statsLabel.Font = Theme.Ui(8.5f, false);
             bottom.Controls.Add(statsLabel);
             clockLabel = new Label();
             clockLabel.AutoSize = false;
             clockLabel.TextAlign = ContentAlignment.TopRight;
             clockLabel.ForeColor = Theme.Dim;
-            clockLabel.Font = Theme.Ui(8f, false);
-            clockLabel.SetBounds(bottom.Width - Dpi.X(80), Dpi.X(102), Dpi.X(64), Dpi.X(20));
-            clockLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            clockLabel.Font = Theme.Ui(8.5f, false);
             bottom.Controls.Add(clockLabel);
             tip = new ToolTip();
             tip.SetToolTip(statsLabel, "鼠标停在这里看今天用量");
@@ -875,6 +1042,7 @@ namespace JingqianShell
             chatView.Dock = DockStyle.Fill;
             Controls.Add(chatView);
             chatView.BringToFront();
+            chatView.EmptyIcon = LoadEmptyIcon();
 
             // 右下角拖拽改大小
             Panel grip = new Panel();
@@ -894,6 +1062,195 @@ namespace JingqianShell
             Controls.Add(grip);
             grip.BringToFront();
             Resize += delegate { grip.Location = new Point(Width - Dpi.X(18), Height - Dpi.X(18)); };
+
+            // 拖文件/图片进来（主窗口、消息区、输入区都收）
+            HookDrop(this);
+            HookDrop(chatView);
+            HookDrop(inputWrap);
+            HookDrop(input);
+
+            LayoutTop();
+            LayoutBottom();
+            UpdateInputHint();
+        }
+
+        // 工具栏按钮：secondary 白底蓝字，primary 蓝底白字
+        Button ToolBtn(Panel host, ref int x, string text, bool primary, EventHandler click)
+        {
+            Button b = MakeButton(text, primary ? Theme.Accent : Color.White, primary ? Color.White : Theme.AccentDeep);
+            b.SetBounds(x, Dpi.X(7), TextWidth(text), Dpi.X(26));
+            b.Click += click;
+            host.Controls.Add(b);
+            x += b.Width + Dpi.X(6);
+            return b;
+        }
+
+        void LayoutTop()
+        {
+            if (topHost == null || caption == null || toolPanel == null) return;
+            int w = ClientSize.Width;
+            bool radar = radarBar != null && radarBar.Visible;
+            topHost.Height = Dpi.X(radar ? 122 : 88);
+            caption.SetBounds(0, 0, w, Dpi.X(48));
+            toolPanel.SetBounds(0, Dpi.X(48), w, Dpi.X(40));
+            toolBorderY = toolPanel.Height - 1;
+            radarBar.SetBounds(0, Dpi.X(88), w, Dpi.X(34));
+            if (radarGoBtn != null)
+            {
+                radarLaterBtn.SetBounds(w - Dpi.X(12) - radarLaterBtn.Width, Dpi.X(4), radarLaterBtn.Width, Dpi.X(26));
+                radarGoBtn.SetBounds(radarLaterBtn.Left - Dpi.X(8) - radarGoBtn.Width, Dpi.X(4), radarGoBtn.Width, Dpi.X(26));
+                radarLabel.SetBounds(Dpi.X(16), 0, Math.Max(Dpi.X(120), radarGoBtn.Left - Dpi.X(28)), Dpi.X(34));
+            }
+            if (dragHintLabel != null)
+                dragHintLabel.SetBounds(toolPanel.Width - Dpi.X(196), 0, Dpi.X(184), toolPanel.Height);
+        }
+
+        void LayoutBottom()
+        {
+            if (bottom == null || inputWrap == null || sendBtn == null) return;
+            bool hasAttach = attachments.Count > 0;
+            int inputTop = hasAttach ? Dpi.X(42) : Dpi.X(12);
+            bottom.Height = hasAttach ? Dpi.X(148) : Dpi.X(112);
+            if (attachBar != null)
+            {
+                attachBar.Visible = hasAttach;
+                attachBar.SetBounds(Dpi.X(14), Dpi.X(9), Math.Max(Dpi.X(120), bottom.ClientSize.Width - Dpi.X(28)), Dpi.X(26));
+            }
+            int rightW = Dpi.X(86);
+            int avail = Math.Max(Dpi.X(160), bottom.ClientSize.Width - Dpi.X(28) - rightW - Dpi.X(10));
+            inputWrap.SetBounds(Dpi.X(14), inputTop, avail, Dpi.X(64));
+            input.SetBounds(Dpi.X(12), Dpi.X(9), avail - Dpi.X(24), Dpi.X(46));
+            inputHint.SetBounds(Dpi.X(15), Dpi.X(11), avail - Dpi.X(30), Dpi.X(24));
+            sendBtn.SetBounds(inputWrap.Right + Dpi.X(10), inputTop + Dpi.X(11), rightW, Dpi.X(42));
+            statsLabel.SetBounds(Dpi.X(16), bottom.Height - Dpi.X(24), Math.Max(Dpi.X(160), bottom.ClientSize.Width - Dpi.X(120)), Dpi.X(18));
+            clockLabel.SetBounds(bottom.ClientSize.Width - Dpi.X(86), bottom.Height - Dpi.X(24), Dpi.X(70), Dpi.X(18));
+        }
+
+        // 输入框内容少的时候不显示滚动条，超过三行才给
+        void SyncInputScrollbar()
+        {
+            try
+            {
+                bool need = input.Lines.Length > 3 || input.Text.Length > 160;
+                ScrollBars want = need ? ScrollBars.Vertical : ScrollBars.None;
+                if (input.ScrollBars != want) input.ScrollBars = want;
+            }
+            catch { }
+        }
+
+        void UpdateInputHint()
+        {
+            if (inputHint == null || input == null) return;
+            inputHint.Visible = input.Text.Length == 0;
+            if (attachments.Count > 0)
+                inputHint.Text = "再加一句话也行，直接发送也可以";
+            else
+                inputHint.Text = "说点什么…（回车发送，Shift+回车换行）";
+        }
+
+        // ---------- 拖文件 / 图片 ----------
+        bool dropHover;
+
+        void SetDropHover(bool on)
+        {
+            if (dropHover == on) return;
+            dropHover = on;
+            if (inputWrap != null) inputWrap.Invalidate();
+            if (inputHint != null && on)
+            {
+                inputHint.Visible = true;
+                inputHint.Text = "松手就贴到输入框上方";
+            }
+            else UpdateInputHint();
+        }
+
+        void HookDrop(Control c)
+        {
+            if (c == null) return;
+            c.AllowDrop = true;
+            c.DragEnter += delegate (object s, DragEventArgs e)
+            {
+                if (e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    e.Effect = DragDropEffects.Copy;
+                    SetDropHover(true);
+                }
+                else e.Effect = DragDropEffects.None;
+            };
+            c.DragLeave += delegate { SetDropHover(false); };
+            c.DragDrop += delegate (object s, DragEventArgs e)
+            {
+                SetDropHover(false);
+                if (e.Data == null || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+                try { AddAttachments((string[])e.Data.GetData(DataFormats.FileDrop)); }
+                catch (Exception ex) { caption.StatusText = "贴附件失败：" + ex.Message; caption.Invalidate(); }
+            };
+        }
+
+        void AddAttachments(string[] paths)
+        {
+            if (paths == null) return;
+            int added = 0;
+            foreach (string raw in paths)
+            {
+                if (string.IsNullOrEmpty(raw)) continue;
+                if (attachments.Count >= 6) break;
+                string p;
+                try { p = Path.GetFullPath(raw); } catch { continue; }
+                if (!File.Exists(p)) continue;
+                bool dup = false;
+                foreach (AttachItem x in attachments)
+                    if (string.Equals(x.Path, p, StringComparison.OrdinalIgnoreCase)) { dup = true; break; }
+                if (dup) continue;
+                FileInfo fi = new FileInfo(p);
+                string ext = Path.GetExtension(p).ToLowerInvariant();
+                bool img = ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".gif" || ext == ".webp" || ext == ".bmp";
+                attachments.Add(new AttachItem { Path = p, Name = fi.Name, Size = fi.Length, Kind = img ? "图片" : "文件" });
+                added++;
+            }
+            if (added > 0)
+            {
+                caption.StatusText = "已贴上 " + attachments.Count + " 个附件，发送时一起带上";
+                caption.Invalidate();
+            }
+            RebuildAttachChips();
+            LayoutBottom();
+            UpdateInputHint();
+        }
+
+        void RebuildAttachChips()
+        {
+            if (attachBar == null) return;
+            attachBar.SuspendLayout();
+            attachBar.Controls.Clear();
+            foreach (AttachItem it in attachments)
+            {
+                string label = it.Name.Length > 16 ? it.Name.Substring(0, 15) + "…" : it.Name;
+                string text = label + "  ×";
+                FlatBtn b = new FlatBtn(text, Color.FromArgb(230, 241, 250), Theme.AccentDeep);
+                b.Font = Theme.Ui(8.5f, false);
+                b.Radius = 11;
+                b.Size = new Size(TextRenderer.MeasureText(text, b.Font).Width + Dpi.X(18), Dpi.X(24));
+                b.Margin = new Padding(0, 0, Dpi.X(6), 0);
+                AttachItem captured = it;
+                b.Click += delegate
+                {
+                    attachments.Remove(captured);
+                    RebuildAttachChips();
+                    LayoutBottom();
+                    UpdateInputHint();
+                };
+                tip.SetToolTip(b, it.Kind + " · " + HumanSize(it.Size) + " · 点一下就撤掉");
+                attachBar.Controls.Add(b);
+            }
+            attachBar.ResumeLayout();
+        }
+
+        static string HumanSize(long n)
+        {
+            if (n < 1024) return n + " B";
+            if (n < 1024 * 1024) return (n / 1024) + " KB";
+            return (n / 1024.0 / 1024.0).ToString("0.0") + " MB";
         }
 
         int TextWidth(string text)
@@ -901,31 +1258,22 @@ namespace JingqianShell
             return TextRenderer.MeasureText(text, Theme.Ui(9f, true)).Width + Dpi.X(22);
         }
 
-        // ---------- 免费模型雷达提示条：布局 / 显隐 / 后台问一次 ----------
-        void LayoutRadarBar(Panel toolbar)
-        {
-            if (radarBar == null || toolbar == null || radarGoBtn == null || radarLaterBtn == null) return;
-            int w = Dpi.X(240) + Dpi.X(8) + radarGoBtn.Width + Dpi.X(6) + radarLaterBtn.Width + Dpi.X(8);
-            int x = Math.Max(Dpi.X(10), toolbar.Width - w - Dpi.X(10));
-            radarBar.SetBounds(x, Dpi.X(6), w, Dpi.X(26));
-            radarLabel.SetBounds(Dpi.X(8), 0, Dpi.X(240), Dpi.X(26));
-            radarGoBtn.SetBounds(Dpi.X(240) + Dpi.X(8), Dpi.X(3), radarGoBtn.Width, Dpi.X(20));
-            radarLaterBtn.SetBounds(radarGoBtn.Left + radarGoBtn.Width + Dpi.X(6), Dpi.X(3), radarLaterBtn.Width, Dpi.X(20));
-        }
-
+        // ---------- 免费模型雷达提示条：显隐 / 后台问一次 ----------
         void ShowRadarBar(int n, string sample)
         {
             if (radarBar == null) return;
             // 字数控制在一条内：具体是哪几个模型，去设置页看（横条里不塞长名字）
             radarLabel.Text = "发现 " + n + " 个新的免费模型，要现在配置吗？";
-            LayoutRadarBar(radarBar.Parent as Panel);
             radarBar.Visible = true;
-            radarBar.BringToFront();
+            LayoutTop();
+            radarBar.Invalidate();
         }
 
         void HideRadarBar()
         {
-            if (radarBar != null) radarBar.Visible = false;
+            if (radarBar == null) return;
+            radarBar.Visible = false;
+            LayoutTop();
         }
 
         // 只读服务里的缓存，不在 UI 线程里联网
@@ -1052,14 +1400,8 @@ namespace JingqianShell
 
         Button MakeButton(string text, Color back, Color fore)
         {
-            Button b = new Button();
-            b.Text = text;
-            b.FlatStyle = FlatStyle.Flat;
-            b.FlatAppearance.BorderSize = 0;
-            b.BackColor = back;
-            b.ForeColor = fore;
-            b.Font = Theme.Ui(9.5f, true);
-            b.Cursor = Cursors.Hand;
+            FlatBtn b = new FlatBtn(text, back, fore);
+            if (back == Color.White || back.GetBrightness() > 0.93f) b.NormalBorder = Theme.Border;
             return b;
         }
 
@@ -1084,6 +1426,24 @@ namespace JingqianShell
             {
                 string ico = Path.Combine(Application.StartupPath, "icon.ico");
                 if (File.Exists(ico)) return new Icon(ico, 20, 20).ToBitmap();
+            }
+            catch { }
+            return null;
+        }
+
+        // 空对话里的欢迎小图：用 app 图标放大，缺图时退回 null（ChatView 会画个色块）
+        Image LoadEmptyIcon()
+        {
+            try
+            {
+                string png = Path.Combine(Application.StartupPath, "icon.png");
+                if (File.Exists(png)) return Image.FromFile(png);
+            }
+            catch { }
+            try
+            {
+                string ico = Path.Combine(Application.StartupPath, "icon.ico");
+                if (File.Exists(ico)) return new Icon(ico, 48, 48).ToBitmap();
             }
             catch { }
             return null;
@@ -1222,9 +1582,17 @@ namespace JingqianShell
         {
             if (sending) return;
             string text = input.Text.Trim();
-            if (text.Length == 0) return;
+            if (text.Length == 0 && attachments.Count == 0) return;
             input.Text = "";
-            chatView.Add(true, text);
+            List<string> paths = new List<string>();
+            List<string> names = new List<string>();
+            foreach (AttachItem it in attachments) { paths.Add(it.Path); names.Add(it.Name); }
+            string filesLabel = names.Count > 0 ? string.Join("、", names.ToArray()) : "";
+            chatView.Add(true, text.Length > 0 ? text : "（看看这些附件）", filesLabel);
+            attachments.Clear();
+            RebuildAttachChips();
+            LayoutBottom();
+            UpdateInputHint();
             sending = true;
             sendBtn.Enabled = false;
             sendBtn.Text = "…";
@@ -1237,7 +1605,7 @@ namespace JingqianShell
                 List<Dictionary<string, object>> trace;
                 try
                 {
-                    reply = api.Chat(text, out stats, out trace);
+                    reply = api.Chat(text.Length > 0 ? text : "看看这些附件", paths.Count > 0 ? paths : null, out stats, out trace);
                 }
                 catch (Exception ex)
                 {
@@ -1338,9 +1706,11 @@ namespace JingqianShell
         TextBox txtUrl, txtPort, txtBase, txtModel, txtKey;
         ComboBox cmbTier, cmbSandbox;
         TextBox txtWhitelist, txtQQUrl, txtQQToken;
-        CheckBox chkMemory, chkQQAdvanced;
-        Button btnQQFind, btnQQLink, btnQQUnlink;
+        CheckBox chkMemory, chkQQAdvanced, chkShowKey;
+        Button btnQQFind, btnQQLink, btnQQUnlink, btnAdd, btnDel;
         Label lblQQStatus;
+        Panel headerPanel, contentPanel, footerPanel;
+        FlatBtn btnSave, btnCancel, btnClose;
         bool qqConnected;
         string qqGateway, qqToken;
         string qqNickname;
@@ -1353,13 +1723,13 @@ namespace JingqianShell
             this.api = api;
             this.repoRoot = repoRoot;
             Text = "设置 · 鲸倩";
+            FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(640, 780);
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            ClientSize = new Size(Dpi.X(660), Dpi.X(700));
+            MinimumSize = new Size(Dpi.X(560), Dpi.X(460));
+            AutoScaleMode = AutoScaleMode.None;
             BackColor = Theme.Bg;
             Font = Theme.Ui(9.5f, false);
             try
@@ -1368,156 +1738,258 @@ namespace JingqianShell
                 if (File.Exists(ico)) Icon = new Icon(ico, 32, 32);
             }
             catch { }
+
+            // 自绘标题栏（和主窗口一个观感），下面放可滚动内容，底部固定保存/取消
+            headerPanel = new Panel();
+            headerPanel.Dock = DockStyle.Top;
+            headerPanel.Height = Dpi.X(46);
+            headerPanel.BackColor = Theme.Paper;
+            headerPanel.Paint += delegate (object s, PaintEventArgs e)
+            {
+                using (Pen p = new Pen(Theme.Border, 1f))
+                    e.Graphics.DrawLine(p, 0, headerPanel.Height - 1, headerPanel.Width, headerPanel.Height - 1);
+            };
+            headerPanel.MouseDown += DragDialog;
+            Controls.Add(headerPanel);
+
+            Label title = new Label();
+            title.Text = "设置";
+            title.Font = Theme.Ui(11.5f, true);
+            title.ForeColor = Theme.Text;
+            title.AutoSize = false;
+            title.TextAlign = ContentAlignment.MiddleLeft;
+            title.SetBounds(Dpi.X(18), 0, Dpi.X(220), Dpi.X(46));
+            title.MouseDown += DragDialog;
+            headerPanel.Controls.Add(title);
+
+            btnClose = new FlatBtn("×", Theme.Paper, Theme.Dim);
+            btnClose.Font = Theme.Ui(13f, false);
+            btnClose.Click += delegate { Close(); };
+            headerPanel.Controls.Add(btnClose);
+
+            footerPanel = new Panel();
+            footerPanel.Dock = DockStyle.Bottom;
+            footerPanel.Height = Dpi.X(58);
+            footerPanel.BackColor = Theme.Paper;
+            footerPanel.Paint += delegate (object s, PaintEventArgs e)
+            {
+                using (Pen p = new Pen(Theme.Border, 1f)) e.Graphics.DrawLine(p, 0, 0, footerPanel.Width, 0);
+            };
+            Controls.Add(footerPanel);
+
+            btnSave = new FlatBtn("保存", Theme.Accent, Color.White);
+            btnSave.AccessibleName = "btnSave";
+            btnSave.Click += delegate { Save(); };
+            footerPanel.Controls.Add(btnSave);
+
+            btnCancel = new FlatBtn("取消", Color.White, Theme.AccentDeep);
+            btnCancel.NormalBorder = Theme.Border;
+            btnCancel.AccessibleName = "btnCancel";
+            btnCancel.Click += delegate { Close(); };
+            footerPanel.Controls.Add(btnCancel);
+
+            contentPanel = new Panel();
+            contentPanel.Dock = DockStyle.Fill;
+            contentPanel.AutoScroll = true;
+            contentPanel.BackColor = Theme.Bg;
+            Controls.Add(contentPanel);
+            contentPanel.BringToFront();
+
             BuildUi();
+            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(790));
+            LayoutChrome();
             LoadConfig();
+            ApplyRound();
+            Resize += delegate { LayoutChrome(); ApplyRound(); };
+        }
+
+        void LayoutChrome()
+        {
+            if (headerPanel == null) return;
+            if (btnClose != null) btnClose.SetBounds(headerPanel.Width - Dpi.X(42), Dpi.X(8), Dpi.X(30), Dpi.X(30));
+            if (btnSave != null)
+            {
+                btnSave.SetBounds(footerPanel.Width - Dpi.X(216), Dpi.X(11), Dpi.X(96), Dpi.X(36));
+                btnCancel.SetBounds(footerPanel.Width - Dpi.X(112), Dpi.X(11), Dpi.X(96), Dpi.X(36));
+            }
+        }
+
+        void DragDialog(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            Native.ReleaseCapture();
+            Native.SendMessage(Handle, 0xA1, (IntPtr)0x2, IntPtr.Zero);
+        }
+
+        void ApplyRound()
+        {
+            try
+            {
+                int pref = 2;
+                if (Native.DwmSetWindowAttribute(Handle, 33, ref pref, 4) == 0) { Region = null; return; }
+            }
+            catch { }
+            try
+            {
+                using (GraphicsPath gp = Theme.Round(new Rectangle(0, 0, Width, Height), Dpi.X(14)))
+                    Region = new Region(gp);
+            }
+            catch { }
         }
 
         void BuildUi()
         {
-            Label t1 = Cap("服务地址", 16, 16);
-            txtUrl = Box(16, 38, 380);
+            Section("服务", 14, 12);
+            Cap("服务地址", 14, 42);
+            txtUrl = Box(14, 62, 356);
             txtUrl.AccessibleName = "cfgUrl";
-            Label t2 = Cap("端口", 412, 16);
-            txtPort = Box(412, 38, 80);
+            Cap("端口", 384, 42);
+            txtPort = Box(384, 62, 88);
             txtPort.AccessibleName = "cfgPort";
+            Hint("服务地址一般不用改；改端口后要重启服务才生效。", 14, 94);
 
-            Label t3 = Cap("模型提供方（读 /api/config）", 16, 78);
+            Section("模型提供方", 14, 130);
+            btnAdd = SmallBtn("新增", 470, 124, 70, false);
+            btnAdd.Click += delegate { AddProvider(); };
+            btnDel = SmallBtn("删除", 546, 124, 70, false);
+            btnDel.Click += delegate { DelProvider(); };
+
             list = new ListView();
             list.View = View.Details;
             list.FullRowSelect = true;
             list.HideSelection = false;
-            list.SetBounds(16, 100, 608, 150);
-            list.Columns.Add("名字", 120);
-            list.Columns.Add("档位", 70);
-            list.Columns.Add("模型", 150);
-            list.Columns.Add("base", 262);
+            list.BorderStyle = BorderStyle.FixedSingle;
+            list.BackColor = Color.White;
+            list.Font = Theme.Ui(9f, false);
+            list.SetBounds(Dpi.X(14), Dpi.X(162), Dpi.X(596), Dpi.X(148));
+            list.Columns.Add("名字", Dpi.X(120));
+            list.Columns.Add("档位", Dpi.X(64));
+            list.Columns.Add("模型", Dpi.X(150));
+            list.Columns.Add("base", Dpi.X(254));
             list.AccessibleName = "cfgProviders";
             list.SelectedIndexChanged += delegate
             {
-                if (list.SelectedIndices.Count > 0) SelectProvider(list.SelectedIndices[0]);
+                if (list.SelectedIndices.Count > 0)
+                {
+                    CommitCurrent(list.SelectedIndices[0]);
+                    SelectProvider(list.SelectedIndices[0]);
+                }
             };
-            Controls.Add(list);
+            contentPanel.Controls.Add(list);
+            Hint("新增/删除只改这份列表；点保存才写进 config.json。", 14, 314);
 
-            Label t4 = Cap("选中提供方", 16, 262);
-            Label b1 = Cap("base", 16, 286);
-            txtBase = Box(16, 306, 608);
+            Section("选中的提供方", 14, 352);
+            Cap("base", 14, 382);
+            txtBase = Box(14, 402, 596);
             txtBase.AccessibleName = "cfgBase";
-            Label b2 = Cap("模型", 16, 342);
-            txtModel = Box(16, 362, 300);
+            Cap("模型", 14, 436);
+            txtModel = Box(14, 456, 300);
             txtModel.AccessibleName = "cfgModel";
-            Label b3 = Cap("密钥", 336, 342);
-            txtKey = Box(336, 362, 288);
+            Cap("密钥", 326, 436);
+            txtKey = Box(326, 456, 200);
             txtKey.PasswordChar = '*';
             txtKey.AccessibleName = "cfgKey";
-            Label b4 = Cap("档位", 16, 398);
+            chkShowKey = new CheckBox();
+            chkShowKey.Text = "显示";
+            chkShowKey.Font = Theme.Ui(9f, false);
+            chkShowKey.ForeColor = Theme.Dim;
+            chkShowKey.SetBounds(Dpi.X(536), Dpi.X(459), Dpi.X(70), Dpi.X(24));
+            chkShowKey.CheckedChanged += delegate { txtKey.PasswordChar = chkShowKey.Checked ? '\0' : '*'; };
+            contentPanel.Controls.Add(chkShowKey);
+            Hint("密钥显示为掩码；不改就沿用原来的。", 326, 488);
+
+            Cap("档位", 14, 512);
             cmbTier = new ComboBox();
             cmbTier.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbTier.SetBounds(16, 418, 140, 26);
+            cmbTier.Font = Theme.Ui(9.5f, false);
+            cmbTier.SetBounds(Dpi.X(14), Dpi.X(532), Dpi.X(140), Dpi.X(26));
             cmbTier.Items.Add("local");
             cmbTier.Items.Add("cloud");
             cmbTier.AccessibleName = "cfgTier";
-            Controls.Add(cmbTier);
+            contentPanel.Controls.Add(cmbTier);
 
-            Label b5 = Cap("沙盒档位", 180, 398);
+            Cap("沙盒档位", 184, 512);
             cmbSandbox = new ComboBox();
             cmbSandbox.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbSandbox.SetBounds(180, 418, 130, 26);
+            cmbSandbox.Font = Theme.Ui(9.5f, false);
+            cmbSandbox.SetBounds(Dpi.X(184), Dpi.X(532), Dpi.X(130), Dpi.X(26));
             cmbSandbox.Items.Add("none");
             cmbSandbox.Items.Add("process");
             cmbSandbox.Items.Add("docker");
             cmbSandbox.AccessibleName = "cfgSandbox";
-            Controls.Add(cmbSandbox);
+            contentPanel.Controls.Add(cmbSandbox);
 
-            Label b6 = Cap("命令白名单（逗号分隔）", 16, 450);
-            txtWhitelist = Box(16, 470, 608);
+            Cap("命令白名单（逗号分隔）", 14, 570);
+            txtWhitelist = Box(14, 590, 596);
             txtWhitelist.AccessibleName = "cfgWhitelist";
 
             chkMemory = new CheckBox();
             chkMemory.Text = "自动记记忆（autoCapture）";
-            chkMemory.SetBounds(16, 502, 300, 24);
+            chkMemory.Font = Theme.Ui(9f, false);
+            chkMemory.ForeColor = Theme.Text;
+            chkMemory.SetBounds(Dpi.X(14), Dpi.X(626), Dpi.X(300), Dpi.X(24));
             chkMemory.AccessibleName = "cfgMemory";
-            Controls.Add(chkMemory);
+            contentPanel.Controls.Add(chkMemory);
 
-            Label q1 = Cap("QQ 一键连接（可选，默认关；聊天/记忆/工具都在本机）", 16, 528);
-            btnQQFind = new Button();
-            btnQQFind.Text = "自动找 QQ 桥接";
-            btnQQFind.SetBounds(16, 550, 150, 34);
-            btnQQFind.BackColor = Theme.Accent;
-            btnQQFind.ForeColor = Color.White;
-            btnQQFind.FlatStyle = FlatStyle.Flat;
-            btnQQFind.FlatAppearance.BorderSize = 0;
+            Section("QQ 一键连接（可选，默认关）", 14, 662);
+            btnQQFind = SmallBtn("自动找 QQ 桥接", 14, 690, 150, true);
             btnQQFind.AccessibleName = "cfgQQFind";
             btnQQFind.Click += delegate { QQFind(); };
-            Controls.Add(btnQQFind);
 
             lblQQStatus = new Label();
             lblQQStatus.AutoSize = false;
             lblQQStatus.Text = "QQ：未检测";
             lblQQStatus.ForeColor = Theme.Dim;
-            lblQQStatus.SetBounds(176, 556, 300, 24);
-            Controls.Add(lblQQStatus);
+            lblQQStatus.Font = Theme.Ui(9f, false);
+            lblQQStatus.SetBounds(Dpi.X(176), Dpi.X(694), Dpi.X(270), Dpi.X(26));
+            contentPanel.Controls.Add(lblQQStatus);
 
-            btnQQLink = new Button();
-            btnQQLink.Text = "连接";
-            btnQQLink.SetBounds(486, 550, 70, 34);
-            btnQQLink.FlatStyle = FlatStyle.Flat;
-            btnQQLink.Enabled = false;
+            btnQQLink = SmallBtn("连接", 452, 690, 70, false);
             btnQQLink.AccessibleName = "cfgQQLink";
+            btnQQLink.Enabled = false;
             btnQQLink.Click += delegate { QQConnect(); };
-            Controls.Add(btnQQLink);
 
-            btnQQUnlink = new Button();
-            btnQQUnlink.Text = "断开";
-            btnQQUnlink.SetBounds(564, 550, 70, 34);
-            btnQQUnlink.FlatStyle = FlatStyle.Flat;
-            btnQQUnlink.Enabled = false;
+            btnQQUnlink = SmallBtn("断开", 530, 690, 70, false);
             btnQQUnlink.AccessibleName = "cfgQQUnlink";
+            btnQQUnlink.Enabled = false;
             btnQQUnlink.Click += delegate { QQDisconnect(); };
-            Controls.Add(btnQQUnlink);
 
             chkQQAdvanced = new CheckBox();
             chkQQAdvanced.Text = "高级（显示网关地址 / 令牌）";
-            chkQQAdvanced.SetBounds(16, 592, 300, 24);
+            chkQQAdvanced.Font = Theme.Ui(9f, false);
+            chkQQAdvanced.ForeColor = Theme.Text;
+            chkQQAdvanced.SetBounds(Dpi.X(14), Dpi.X(730), Dpi.X(300), Dpi.X(24));
             chkQQAdvanced.AccessibleName = "cfgQQAdvanced";
             chkQQAdvanced.CheckedChanged += delegate { ToggleQQAdvanced(); };
-            Controls.Add(chkQQAdvanced);
+            contentPanel.Controls.Add(chkQQAdvanced);
 
-            Label q2 = Cap("网关地址", 16, 620);
-            txtQQUrl = Box(16, 640, 380);
+            Cap("网关地址", 14, 764);
+            txtQQUrl = Box(14, 784, 380);
             txtQQUrl.AccessibleName = "cfgQQUrl";
-            Label q3 = Cap("令牌", 412, 620);
-            txtQQToken = Box(412, 640, 212);
+            Cap("令牌", 408, 764);
+            txtQQToken = Box(408, 784, 202);
             txtQQToken.PasswordChar = '*';
             txtQQToken.AccessibleName = "cfgQQToken";
             txtQQUrl.Visible = false;
             txtQQToken.Visible = false;
-            q2.Visible = false;
-            q3.Visible = false;
-            q2.Tag = "adv";
-            q3.Tag = "adv";
             txtQQUrl.Tag = "adv";
             txtQQToken.Tag = "adv";
-            Hint("没接网关时不用管它，不会报错；网桥收到消息后调本机 /api/chat，再把回复发回 QQ。", 16, 664);
-            Hint("密钥显示为掩码；不改就沿用原来的。保存后需要重启服务才生效。", 16, 686);
 
-            Button save = new Button();
-            save.Text = "保存";
-            save.SetBounds(436, 700, 90, 34);
-            save.BackColor = Theme.Accent;
-            save.ForeColor = Color.White;
-            save.FlatStyle = FlatStyle.Flat;
-            save.FlatAppearance.BorderSize = 0;
-            save.AccessibleName = "btnSave";
-            save.Click += delegate { Save(); };
-            Controls.Add(save);
+            Label advHint = Hint("没接网关时不用管它；网桥收到消息后调本机服务，再把回复发回 QQ。", 14, 818);
+            advHint.Tag = "adv";
+            advHint.Visible = false;
+        }
 
-            Button cancel = new Button();
-            cancel.Text = "取消";
-            cancel.SetBounds(536, 700, 88, 34);
-            cancel.FlatStyle = FlatStyle.Flat;
-            cancel.AccessibleName = "btnCancel";
-            cancel.Click += delegate { Close(); };
-            Controls.Add(cancel);
+        Label Section(string text, int x, int y)
+        {
+            Label l = new Label();
+            l.Text = text;
+            l.AutoSize = true;
+            l.Font = Theme.Ui(10.5f, true);
+            l.ForeColor = Theme.AccentDeep;
+            l.Location = new Point(Dpi.X(x), Dpi.X(y));
+            contentPanel.Controls.Add(l);
+            return l;
         }
 
         Label Cap(string text, int x, int y)
@@ -1525,31 +1997,91 @@ namespace JingqianShell
             Label l = new Label();
             l.Text = text;
             l.AutoSize = true;
+            l.Font = Theme.Ui(9f, false);
             l.ForeColor = Theme.Dim;
-            l.Location = new Point(x, y - 2);
-            Controls.Add(l);
+            l.Location = new Point(Dpi.X(x), Dpi.X(y));
+            contentPanel.Controls.Add(l);
             return l;
         }
 
         TextBox Box(int x, int y, int w)
         {
             TextBox b = new TextBox();
-            b.SetBounds(x, y, w, 26);
+            b.SetBounds(Dpi.X(x), Dpi.X(y), Dpi.X(w), Dpi.X(26));
             b.BorderStyle = BorderStyle.FixedSingle;
-            Controls.Add(b);
+            b.BackColor = Color.White;
+            b.Font = Theme.Ui(9.5f, false);
+            contentPanel.Controls.Add(b);
             return b;
         }
 
-        void Hint(string text, int x, int y)
+        Label Hint(string text, int x, int y)
         {
             Label l = new Label();
             l.Text = text;
-            l.AutoSize = true;
+            l.AutoSize = false;
+            l.Font = Theme.Ui(8.5f, false);
             l.ForeColor = Theme.Dim;
-            l.Location = new Point(x, y);
-            Controls.Add(l);
+            l.SetBounds(Dpi.X(x), Dpi.X(y), Dpi.X(596), Dpi.X(38));
+            contentPanel.Controls.Add(l);
+            return l;
         }
 
+        FlatBtn SmallBtn(string text, int x, int y, int w, bool primary)
+        {
+            FlatBtn b = new FlatBtn(text, primary ? Theme.Accent : Color.White, primary ? Color.White : Theme.AccentDeep);
+            if (!primary) b.NormalBorder = Theme.Border;
+            b.Font = Theme.Ui(8.5f, true);
+            b.SetBounds(Dpi.X(x), Dpi.X(y), Dpi.X(w), Dpi.X(30));
+            contentPanel.Controls.Add(b);
+            return b;
+        }
+
+        void CommitCurrent(int newIndex)
+        {
+            if (current < 0 || current >= providers.Count) return;
+            providers[current]["base"] = txtBase.Text.Trim();
+            providers[current]["model"] = txtModel.Text.Trim();
+            providers[current]["key"] = txtKey.Text;
+            providers[current]["tier"] = Convert.ToString(cmbTier.SelectedItem ?? "cloud");
+            if (list.Items.Count > current)
+                list.Items[current].SubItems[2].Text = Get(providers[current], "model");
+        }
+
+        void AddProvider()
+        {
+            CommitCurrent(current);
+            Dictionary<string, object> p = new Dictionary<string, object>();
+            p["name"] = "新模型" + (providers.Count + 1);
+            p["tier"] = "cloud";
+            p["base"] = "";
+            p["model"] = "";
+            p["key"] = "";
+            p["price_in"] = 0;
+            p["price_out"] = 0;
+            providers.Add(p);
+            RefreshList();
+            current = providers.Count - 1;
+            list.Items[current].Selected = true;
+            list.Select();
+            SelectProvider(current);
+            contentPanel.ScrollControlIntoView(btnAdd);
+        }
+
+        void DelProvider()
+        {
+            if (current < 0 || current >= providers.Count) return;
+            string name = Get(providers[current], "name");
+            if (MessageBox.Show(this, "删掉提供方「" + name + "」？保存后才生效。", "鲸倩",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            providers.RemoveAt(current);
+            current = -1;
+            RefreshList();
+            txtBase.Text = "";
+            txtModel.Text = "";
+            txtKey.Text = "";
+            list.SelectedItems.Clear();
+        }
         void LoadConfig()
         {
             try
@@ -1679,7 +2211,7 @@ namespace JingqianShell
         void ToggleQQAdvanced()
         {
             bool v = chkQQAdvanced.Checked;
-            foreach (Control c in Controls)
+            foreach (Control c in contentPanel.Controls)
                 if ((c.Tag as string) == "adv") c.Visible = v;
         }
 
@@ -1838,40 +2370,90 @@ namespace JingqianShell
     {
         readonly ApiClient api;
         TextBox search;
-        ListView list;
+        Label searchHint;
         Label hint;
+        ListView list;
         List<string> ids = new List<string>();
+        List<string[]> rows = new List<string[]>();
+        FlatBtn btnClose;
 
         public MemoryForm(ApiClient api)
         {
             this.api = api;
             Text = "记忆 · 鲸倩";
             StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            FormBorderStyle = FormBorderStyle.None;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(660, 520);
+            ClientSize = new Size(Dpi.X(700), Dpi.X(560));
+            MinimumSize = new Size(Dpi.X(520), Dpi.X(400));
+            AutoScaleMode = AutoScaleMode.None;
             BackColor = Theme.Bg;
             Font = Theme.Ui(9.5f, false);
             try { string ico = Path.Combine(Application.StartupPath, "icon.ico"); if (File.Exists(ico)) Icon = new Icon(ico); } catch { }
 
+            Panel header = new Panel();
+            header.Dock = DockStyle.Top;
+            header.Height = Dpi.X(46);
+            header.BackColor = Theme.Paper;
+            header.Paint += delegate (object s, PaintEventArgs e)
+            {
+                using (Pen p = new Pen(Theme.Border, 1f))
+                    e.Graphics.DrawLine(p, 0, header.Height - 1, header.Width, header.Height - 1);
+            };
+            header.MouseDown += DragDialog;
+            Controls.Add(header);
+
+            Label title = new Label();
+            title.Text = "记忆";
+            title.Font = Theme.Ui(11.5f, true);
+            title.ForeColor = Theme.Text;
+            title.AutoSize = false;
+            title.TextAlign = ContentAlignment.MiddleLeft;
+            title.SetBounds(Dpi.X(18), 0, Dpi.X(200), Dpi.X(46));
+            title.MouseDown += DragDialog;
+            header.Controls.Add(title);
+
+            btnClose = new FlatBtn("×", Theme.Paper, Theme.Dim);
+            btnClose.Font = Theme.Ui(13f, false);
+            btnClose.SetBounds(Dpi.X(700 - 42), Dpi.X(8), Dpi.X(30), Dpi.X(30));
+            btnClose.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnClose.Click += delegate { Close(); };
+            header.Controls.Add(btnClose);
+
             search = new TextBox();
-            search.SetBounds(16, 20, 420, 26);
+            search.BorderStyle = BorderStyle.FixedSingle;
+            search.Font = Theme.Ui(9.5f, false);
+            search.BackColor = Color.White;
+            search.SetBounds(Dpi.X(16), Dpi.X(66), Dpi.X(440), Dpi.X(28));
             search.AccessibleName = "memSearch";
+            search.TextChanged += delegate { UpdateSearchHint(); };
             Controls.Add(search);
 
-            Button go = new Button();
-            go.Text = "搜索";
-            go.SetBounds(446, 18, 90, 28);
-            go.FlatStyle = FlatStyle.Flat;
+            searchHint = new Label();
+            searchHint.AutoSize = false;
+            searchHint.BackColor = Color.White;
+            searchHint.ForeColor = Color.FromArgb(170, 184, 196);
+            searchHint.Font = Theme.Ui(9f, false);
+            searchHint.TextAlign = ContentAlignment.MiddleLeft;
+            searchHint.Text = "搜点什么…（比如：房租、忌口、约定）";
+            searchHint.SetBounds(Dpi.X(21), Dpi.X(68), Dpi.X(420), Dpi.X(24));
+            searchHint.Cursor = Cursors.IBeam;
+            searchHint.Click += delegate { search.Focus(); };
+            Controls.Add(searchHint);
+            searchHint.BringToFront();
+
+            FlatBtn go = new FlatBtn("搜索", Theme.Accent, Color.White);
+            go.Font = Theme.Ui(9f, true);
             go.AccessibleName = "memSearchBtn";
+            go.SetBounds(Dpi.X(468), Dpi.X(66), Dpi.X(84), Dpi.X(28));
             go.Click += delegate { Reload(search.Text.Trim()); };
             Controls.Add(go);
 
-            Button refresh = new Button();
-            refresh.Text = "刷新";
-            refresh.SetBounds(544, 18, 90, 28);
-            refresh.FlatStyle = FlatStyle.Flat;
+            FlatBtn refresh = new FlatBtn("刷新", Color.White, Theme.AccentDeep);
+            refresh.NormalBorder = Theme.Border;
+            refresh.Font = Theme.Ui(9f, true);
+            refresh.SetBounds(Dpi.X(560), Dpi.X(66), Dpi.X(84), Dpi.X(28));
             refresh.Click += delegate { search.Text = ""; Reload(""); };
             Controls.Add(refresh);
 
@@ -1879,28 +2461,36 @@ namespace JingqianShell
             list.View = View.Details;
             list.FullRowSelect = true;
             list.HideSelection = false;
-            list.SetBounds(16, 56, 618, 400);
-            list.Columns.Add("内容", 430);
-            list.Columns.Add("类型", 70);
-            list.Columns.Add("时间", 110);
+            list.BorderStyle = BorderStyle.FixedSingle;
+            list.BackColor = Color.White;
+            list.Font = Theme.Ui(9f, false);
+            list.SetBounds(Dpi.X(16), Dpi.X(106), 0, 0);
+            list.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+            list.Columns.Add("内容", Dpi.X(458));
+            list.Columns.Add("类型", Dpi.X(72));
+            list.Columns.Add("时间", Dpi.X(136));
+            list.SmallImageList = new ImageList();
+            list.SmallImageList.ImageSize = new Size(1, Dpi.X(28));
             list.AccessibleName = "memList";
+            list.DoubleClick += delegate { ShowSelectedDetail(); };
             Controls.Add(list);
 
-            Button del = new Button();
-            del.Text = "删除选中";
-            del.SetBounds(16, 468, 110, 32);
-            del.FlatStyle = FlatStyle.Flat;
+            FlatBtn del = new FlatBtn("删除选中", Color.White, Theme.Warn);
+            del.NormalBorder = Theme.Border;
+            del.Font = Theme.Ui(9f, true);
             del.AccessibleName = "memDelete";
+            del.SetBounds(Dpi.X(16), Dpi.X(516), Dpi.X(104), Dpi.X(30));
+            del.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
             del.Click += delegate
             {
-                if (list.SelectedIndices.Count == 0) { hint.Text = "先选一条"; return; }
+                if (list.SelectedIndices.Count == 0) { hint.Text = "先选一条再删"; return; }
                 string id = ids[list.SelectedIndices[0]];
                 try
                 {
                     Dictionary<string, object> body = new Dictionary<string, object>();
                     body["id"] = id;
                     api.Post("/api/memory/archive", body, 5000);
-                    hint.Text = "已删除（归档）";
+                    hint.Text = "已删除（归档），刷新一下还能看见";
                     Reload(search.Text.Trim());
                 }
                 catch (Exception ex) { hint.Text = "删除失败：" + ex.Message; }
@@ -1908,23 +2498,86 @@ namespace JingqianShell
             Controls.Add(del);
 
             hint = new Label();
-            hint.AutoSize = true;
+            hint.AutoSize = false;
             hint.ForeColor = Theme.Dim;
-            hint.SetBounds(140, 476, 480, 20);
+            hint.Font = Theme.Ui(8.5f, false);
+            hint.SetBounds(Dpi.X(132), Dpi.X(522), Dpi.X(520), Dpi.X(22));
+            hint.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             Controls.Add(hint);
 
+            Resize += delegate { LayoutList(); ApplyRound(); };
+            LayoutList();
+            ApplyRound();
             Reload("");
+        }
+
+        void LayoutList()
+        {
+            int top = Dpi.X(106);
+            int bottomBar = Dpi.X(64);
+            int w = Math.Max(Dpi.X(200), ClientSize.Width - Dpi.X(32));
+            int h = Math.Max(Dpi.X(80), ClientSize.Height - top - bottomBar);
+            list.SetBounds(Dpi.X(16), top, w, h);
+            int timeW = Dpi.X(146);
+            int kindW = Dpi.X(76);
+            list.Columns[0].Width = Math.Max(Dpi.X(140), w - timeW - kindW - Dpi.X(22));
+            list.Columns[1].Width = kindW;
+            list.Columns[2].Width = timeW;
+            if (hint != null) hint.SetBounds(Dpi.X(132), ClientSize.Height - Dpi.X(38), ClientSize.Width - Dpi.X(150), Dpi.X(22));
+        }
+
+        void DragDialog(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            Native.ReleaseCapture();
+            Native.SendMessage(Handle, 0xA1, (IntPtr)0x2, IntPtr.Zero);
+        }
+
+        void ApplyRound()
+        {
+            try
+            {
+                int pref = 2;
+                if (Native.DwmSetWindowAttribute(Handle, 33, ref pref, 4) == 0) { Region = null; return; }
+            }
+            catch { }
+            try
+            {
+                using (GraphicsPath gp = Theme.Round(new Rectangle(0, 0, Width, Height), Dpi.X(14)))
+                    Region = new Region(gp);
+            }
+            catch { }
+        }
+
+        void UpdateSearchHint()
+        {
+            if (searchHint != null) searchHint.Visible = search.Text.Length == 0;
+        }
+
+        static string KindName(string kind)
+        {
+            string k = String.IsNullOrEmpty(kind) ? "?" : kind;
+            if (k == "fact") return "事实";
+            if (k == "pref" || k == "preference") return "偏好";
+            if (k == "relation" || k == "relationship") return "关系";
+            if (k == "event") return "事件";
+            if (k == "rule") return "规则";
+            if (k == "lesson") return "经验";
+            if (k == "topic") return "话题";
+            if (k == "promise" || k == "agreement") return "约定";
+            return k;
         }
 
         void Reload(string query)
         {
             try
             {
-                string path = "/api/memory" + (query.Length > 0 ? ("?query=" + Uri.EscapeDataString(query)) : "");
+                string path = "/api/memory" + (query.Length > 0 ? ("?query=" + Uri.EscapeDataString(query) + "&k=20") : "");
                 Dictionary<string, object> r = api.Get(path, 5000);
                 object items;
                 list.Items.Clear();
                 ids.Clear();
+                rows.Clear();
                 if (r.TryGetValue("hits", out items) && items is object[])
                 {
                     foreach (object o in (object[])items) AddRow((Dictionary<string, object>)o);
@@ -1933,9 +2586,13 @@ namespace JingqianShell
                 else if (r.TryGetValue("items", out items) && items is object[])
                 {
                     foreach (object o in (object[])items) AddRow((Dictionary<string, object>)o);
-                    hint.Text = "共 " + list.Items.Count + " 条（最近 50）";
+                    hint.Text = "共 " + list.Items.Count + " 条（最近 50）· 双击看全文";
                 }
-                else hint.Text = "没有记忆";
+                else
+                {
+                    hint.Text = "还没有记忆。聊到约定、偏好、重要日子，她会自己记。";
+                }
+                UpdateSearchHint();
             }
             catch (Exception ex)
             {
@@ -1950,7 +2607,17 @@ namespace JingqianShell
             string at = d.ContainsKey("created_at") ? Convert.ToString(d["created_at"]) : "";
             if (at.Length > 16) at = at.Substring(0, 16).Replace("T", " ");
             ids.Add(d.ContainsKey("id") ? Convert.ToString(d["id"]) : "");
-            list.Items.Add(new ListViewItem(new string[] { text, kind, at }));
+            rows.Add(new string[] { text, KindName(kind), at });
+            list.Items.Add(new ListViewItem(new string[] { text, KindName(kind), at }));
+        }
+
+        void ShowSelectedDetail()
+        {
+            if (list.SelectedIndices.Count == 0) return;
+            int i = list.SelectedIndices[0];
+            if (i < 0 || i >= rows.Count) return;
+            string[] r = rows[i];
+            MessageBox.Show(this, r[0], r[1] + " · " + r[2], MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 
@@ -2133,6 +2800,68 @@ namespace JingqianShell
             return fail == 0 ? 0 : 1;
         }
 
+        // 离屏抓一张窗体图（UI 复查/文档用）
+        static void Shot(Form f, string png)
+        {
+            try
+            {
+                using (Bitmap bmp = new Bitmap(f.Width, f.Height))
+                {
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        IntPtr hdc = g.GetHdc();
+                        bool ok = Native.PrintWindow(f.Handle, hdc, 0);
+                        g.ReleaseHdc(hdc);
+                        if (!ok) { hdc = g.GetHdc(); Native.PrintWindow(f.Handle, hdc, 0); g.ReleaseHdc(hdc); }
+                    }
+                    bmp.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+                }
+                Console.WriteLine("SHOT " + png);
+            }
+            catch (Exception ex) { Console.WriteLine("SHOT FAIL " + png + " :: " + ex.Message); }
+        }
+
+        // 离屏把设置页、记忆页各拍一张（给文档和 UI 复查用，不弹到他眼前）
+        static int ShootPanels(string repo, string baseUrl)
+        {
+            ServiceKeeper k = new ServiceKeeper(baseUrl, repo);
+            if (!k.Ensure(20000)) { Console.WriteLine("FAIL 服务没起来"); return 1; }
+            ApiClient api = new ApiClient(baseUrl);
+            try
+            {
+                using (SettingsForm s = new SettingsForm(api, repo))
+                {
+                    s.StartPosition = FormStartPosition.Manual;
+                    s.Location = new Point(-30000, -30000);
+                    s.ShowInTaskbar = false;
+                    s.Show();
+                    Application.DoEvents();
+                    Thread.Sleep(600);
+                    Application.DoEvents();
+                    Shot(s, Path.Combine(repo, "data", "_ui_settings.png"));
+                    s.Hide();
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("SETTINGS SHOT FAIL " + ex.Message); }
+            try
+            {
+                using (MemoryForm m = new MemoryForm(api))
+                {
+                    m.StartPosition = FormStartPosition.Manual;
+                    m.Location = new Point(-30000, -30000);
+                    m.ShowInTaskbar = false;
+                    m.Show();
+                    Application.DoEvents();
+                    Thread.Sleep(600);
+                    Application.DoEvents();
+                    Shot(m, Path.Combine(repo, "data", "_ui_memory.png"));
+                    m.Hide();
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("MEMORY SHOT FAIL " + ex.Message); }
+            return 0;
+        }
+
         [STAThread]
         static int Main(string[] args)
         {
@@ -2159,7 +2888,10 @@ namespace JingqianShell
                 else if (args[i] == "--url" && i + 1 < args.Length) baseUrl = args[++i];
                 else if (args[i] == "--send" && i + 1 < args.Length) sendText = args[++i];
                 else if (args[i] == "--set-model" && i + 1 < args.Length) { model = args[++i]; mode = "setmodel"; }
+                else if (args[i] == "--shots") mode = "shots";
+
             }
+            if (mode == "shots") return ShootPanels(repo, baseUrl);
             if (mode != "ui")
             {
                 try { Console.OutputEncoding = Encoding.UTF8; } catch { }

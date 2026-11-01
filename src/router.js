@@ -127,9 +127,13 @@ class Router {
   async call(messages, tools, opts) {
     opts = opts || {};
     let list = this.candidates(opts.taskText || '');
+    // 带图片的这轮只找声明了 vision 的提供方，别的家不硬塞（塞了也是 400）
+    if (opts.requireVision) list = list.filter((p) => p.vision);
     if (!list.length) {
-      const err = new Error('没有可用的模型：请在 config.json 的 providers 里填一家云端 key，或者本机起一个 Ollama。');
-      err.code = 'NO_PROVIDER';
+      const err = new Error(opts.requireVision
+        ? '带图片的这轮需要支持视觉的提供方（provider 上写 "vision": true），现在没有可用的。'
+        : '没有可用的模型：请在 config.json 的 providers 里填一家云端 key，或者本机起一个 Ollama。');
+      err.code = opts.requireVision ? 'NO_VISION' : 'NO_PROVIDER';
       throw err;
     }
     if (!opts.skipQuota) {

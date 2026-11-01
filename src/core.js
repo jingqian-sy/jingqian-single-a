@@ -256,7 +256,11 @@ class Her {
     const maxTokens = budget.perTaskTokens || 200000;
     const maxSteps = (this.cfg.route && this.cfg.route.maxSteps) || 12;
     const text = String(userText || '').trim();
-    if (!text) return { reply: '你想说啥？', stats: {}, memory: null };
+    const images = Array.isArray(opts.images) ? opts.images : [];
+    const attachBlock = String(opts.attachBlock || '');
+    if (!text && !images.length && !attachBlock) return { reply: '你想说啥？', stats: {}, memory: null };
+    // 只有图片、没打字时，也要给历史和记忆一句能读的「这件事」
+    const displayText = text || ('（发来' + (images.length ? images.length + ' 张图片' : '附件') + '：' + images.map((x) => x.name).join('、') + '）');
 
     // 「确认」= 把刚才被红线拦下那一步重放一次
     if (/^(确认|确定|同意|可以|继续|就这么办|执行吧?)$/.test(text) && this.pending && Date.now() - this.pending.at < 10 * 60000) {
@@ -276,6 +280,16 @@ class Her {
     const recallRes = await this.recallBlock(text);
     const captured = this.capture(text);
     const messages = this.buildMessages(text, recallRes, history);
+    // 附件：文本内容接在这一次的用户消息后面；图片换成 OpenAI 的多模态 content 数组。
+    // 注意只影响这一趟发给模型的 messages，历史里仍只存用户打的那句话，免得越聊越臃肿。
+    if (attachBlock || images.length) {
+      const last = messages[messages.length - 1];
+      let content = String(last.content || '');
+      if (attachBlock) content += '\n\n' + attachBlock;
+      last.content = images.length
+        ? [{ type: 'text', text: content }].concat(images.map((img) => ({ type: 'image_url', image_url: { url: img.dataUrl } })))
+        : content;
+    }
 
     let usedTools = [];
     const trace = [];
@@ -289,11 +303,25 @@ class Her {
       if (Date.now() - started > maxSeconds) { lastText = '（这条太绕了，我先停一下，超了这轮的时间上限。）'; break; }
       if (totalPrompt + totalCompletion > maxTokens) { lastText = '（token 预算用完了，我先停一下。）'; break; }
 
-      const res = await this.router.call(messages, this.toolsForStep(step, text), {
-        taskText: text,
-        temperature: this.cfg.temperature == null ? 0.7 : this.cfg.temperature,
-        timeoutMs: (this.cfg.budget && this.cfg.budget.perCallSeconds || 120) * 1000
-      });
+      let res;
+      try {
+        res = await this.router.call(messages, this.toolsForStep(step, text), {
+          taskText: text,
+          requireVision: images.length > 0,
+          temperature: this.cfg.temperature == null ? 0.7 : this.cfg.temperature,
+          timeoutMs: (this.cfg.budget && this.cfg.budget.perCallSeconds || 120) * 1000
+        });
+      } catch (e) {
+        if (e.code === 'NO_VISION') {
+          const names = images.map((x) => x.name).join('、');
+          lastText = '图我收下了（' + names + '），但现在接的模型看不了图片，我也不硬猜。'
+            + '想让我看图的话，在设置里加一家支持视觉的提供方（config.json 的 provider 上写 "vision": true），'
+            + '或者直接把图里要紧的字打给我。';
+          steps = Math.max(steps, 1);
+          break;
+        }
+        throw e;
+      }
       provider = res.provider.name;
       totalPrompt += res.stat.prompt_tokens;
       totalCompletion += res.stat.completion_tokens;
@@ -338,7 +366,7 @@ class Her {
 
     const reply = lastText || '（这轮没出结论，要不再说一次？）';
     const h = this.loadHistory(sessionId);
-    h.messages.push({ role: 'user', content: text }, { role: 'assistant', content: reply });
+    h.messages.push({ role: 'user', content: displayText }, { role: 'assistant', content: reply });
     this.saveHistory(sessionId, h);
 
     if (this.cfg.memory && this.cfg.memory.writeEvents !== false) {

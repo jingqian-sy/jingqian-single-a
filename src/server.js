@@ -24,6 +24,7 @@ const { Her } = require('./core');
 const qq = require('./qq/adapter');
 const qqConnect = require('./qq/connect');
 const radar = require('./radar');
+const attach = require('./attach');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -89,9 +90,27 @@ async function handleApi(req, res, url) {
   const p = url.pathname;
   if (p === '/api/chat' && req.method === 'POST') {
     const body = await readBody(req);
-    if (!body.message) return json(res, 400, { ok: false, error: '缺少 message' });
+    if (!body.message && !(Array.isArray(body.attachments) && body.attachments.length)) {
+      return json(res, 400, { ok: false, error: '缺少 message' });
+    }
+    // 拖进输入栏的文件：只读本地文件，不联网；文本接进这轮对话，图片走多模态
+    let at = null;
+    if (Array.isArray(body.attachments) && body.attachments.length) {
+      at = attach.describe(body.attachments);
+      if (!at.files.length && !at.images.length) {
+        return json(res, 200, {
+          ok: false,
+          error: '这些附件都没读成：' + at.skipped.map((s) => s.reason).join('；'),
+          code: 'ATTACH_FAILED'
+        });
+      }
+    }
     try {
-      const r = await her.chat(body.message, { sessionId: body.session || 'web' });
+      const r = await her.chat(String(body.message || ''), {
+        sessionId: body.session || 'web',
+        attachBlock: at ? at.block : '',
+        images: at ? at.images : []
+      });
       // 给软件版底部数据栏用的「真实」最后一次调用数据（没有的字段不硬造）
       lastChat = {
         at: new Date().toISOString(),
@@ -103,7 +122,11 @@ async function handleApi(req, res, url) {
         steps: Number(r.stats.steps || 0),
         cache_rate: (r.stats.cache_rate === null || r.stats.cache_rate === undefined) ? null : r.stats.cache_rate
       };
-      return json(res, 200, { ok: true, reply: r.reply, stats: r.stats, memory: r.memory, trace: r.trace || [] });
+      return json(res, 200, {
+        ok: true, reply: r.reply, stats: r.stats, memory: r.memory, trace: r.trace || [],
+        attachments: at ? at.files.map((f) => ({ name: f.name, kind: f.kind, size: f.size })) : [],
+        attachSkipped: at ? at.skipped : []
+      });
     } catch (e) {
       return json(res, 200, { ok: false, error: e.message, code: e.code || 'CHAT_FAILED' });
     }
