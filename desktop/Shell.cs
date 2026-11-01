@@ -617,6 +617,23 @@ namespace JingqianShell
                     if (DumpBubbles)
                     {
                         DumpCount = bubbles;
+                        // 验收/截图用钩子：JQ_RADAR_DEMO=1 时先同步问一次雷达，让截图能拍到顶部横条
+                        if (Environment.GetEnvironmentVariable("JQ_RADAR_DEMO") == "1")
+                        {
+                            try
+                            {
+                                Dictionary<string, object> rd = api.Get("/api/radar", 5000);
+                                object arr;
+                                if (rd.TryGetValue("new", out arr) && arr is object[] && ((object[])arr).Length > 0)
+                                {
+                                    ShowRadarBar(((object[])arr).Length, "");
+                                    Application.DoEvents();
+                                    System.Threading.Thread.Sleep(150);
+                                    Application.DoEvents();
+                                }
+                            }
+                            catch { }
+                        }
                         try { RefreshStats(); } catch { }
                         Console.WriteLine("bubbles=" + bubbles + " (session=web, 服务状态=" + (ok ? "up" : "down") + ")");
                         try
