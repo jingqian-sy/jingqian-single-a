@@ -488,6 +488,7 @@ namespace JingqianShell
         {
             Graphics g = e.Graphics;
             g.Clear(Theme.Paper);
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             if (AppIcon != null) g.DrawImage(AppIcon, new Rectangle(Dpi.X(14), (Height - Dpi.X(20)) / 2, Dpi.X(20), Dpi.X(20)));
             TextRenderer.DrawText(g, Title, titleFont, new Rectangle(Dpi.X(42), Dpi.X(8), Dpi.X(120), Dpi.X(26)), Theme.Text, TextFormatFlags.NoPadding);
             using (SolidBrush dot = new SolidBrush(Online ? Theme.OkDot : Theme.Warn))
@@ -529,6 +530,8 @@ namespace JingqianShell
         ChatView chatView;
         TextBox input;
         Button sendBtn;
+        Panel inputWrap;
+        Button settingsBtn;
         CaptionBar caption;
         NotifyIcon tray;
         Label statsLabel;
@@ -548,8 +551,8 @@ namespace JingqianShell
             Text = "鲸倩";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
-            Size = new Size(Dpi.X(430), Dpi.X(600));
-            MinimumSize = new Size(Dpi.X(360), Dpi.X(420));
+            Size = new Size(Dpi.X(900), Dpi.X(700));
+            MinimumSize = new Size(Dpi.X(720), Dpi.X(520));
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
             if (Height > wa.Height - Dpi.X(24)) Height = wa.Height - Dpi.X(24);
             if (Width > wa.Width - Dpi.X(24)) Width = wa.Width - Dpi.X(24);
@@ -559,7 +562,7 @@ namespace JingqianShell
             try
             {
                 string ico = Path.Combine(Application.StartupPath, "icon.ico");
-                if (File.Exists(ico)) Icon = new Icon(ico);
+                if (File.Exists(ico)) Icon = new Icon(ico, 32, 32);
             }
             catch { }
 
@@ -576,7 +579,19 @@ namespace JingqianShell
                     if (openSettings) OpenSettings();
                 });
             };
-            Resize += delegate { ApplyRound(); };
+            Resize += delegate
+            {
+                ApplyRound();
+                if (inputWrap != null && sendBtn != null)
+                {
+                    int w = Math.Max(Dpi.X(200), Width - Dpi.X(28) - Dpi.X(90) - Dpi.X(10));
+                    inputWrap.Width = w;
+                    if (input != null) input.Width = Math.Max(Dpi.X(120), w - Dpi.X(24));
+                    sendBtn.Left = inputWrap.Left + inputWrap.Width + Dpi.X(10);
+                    if (settingsBtn != null) settingsBtn.Left = sendBtn.Left;
+                    if (statsLabel != null) statsLabel.Width = Math.Max(Dpi.X(200), Width - Dpi.X(110));
+                }
+            };
             FormClosing += delegate
             {
                 if (tray != null) { tray.Visible = false; tray.Dispose(); tray = null; }
@@ -601,7 +616,7 @@ namespace JingqianShell
         {
             caption = new CaptionBar();
             caption.Dock = DockStyle.Top;
-            caption.AppIcon = Icon != null ? Icon.ToBitmap() : null;
+            caption.AppIcon = LoadSmallIcon();
             caption.MinClick += delegate { WindowState = FormWindowState.Minimized; };
             caption.MaxClick += delegate
             {
@@ -625,7 +640,7 @@ namespace JingqianShell
             bNew.FlatAppearance.BorderColor = Theme.Border;
             bNew.FlatAppearance.BorderSize = 1;
             bNew.SetBounds(tx, Dpi.X(6), TextWidth("新对话"), Dpi.X(26));
-            bNew.Click += delegate { chatView.Clear(); caption.StatusText = "新对话（历史已清空显示）"; caption.Invalidate(); };
+            bNew.Click += delegate { chatView.Clear(); caption.StatusText = "已清空显示"; caption.Invalidate(); };
             toolbar.Controls.Add(bNew);
             tx += bNew.Width + Dpi.X(6);
             Button bState = MakeButton("状态", Color.White, Theme.AccentDeep);
@@ -664,7 +679,8 @@ namespace JingqianShell
                 using (Pen p = new Pen(Theme.Border, 1f)) e.Graphics.DrawLine(p, 0, 0, bottom.Width, 0);
             };
 
-            Panel inputBox = new Panel();
+            inputWrap = new Panel();
+            Panel inputBox = inputWrap;
             inputBox.SetBounds(Dpi.X(14), Dpi.X(10), Dpi.X(300), Dpi.X(74));
             inputBox.BackColor = Theme.Bg;
             inputBox.Paint += delegate (object s, PaintEventArgs e)
@@ -701,7 +717,7 @@ namespace JingqianShell
             sendBtn.Click += delegate { SendCurrent(); };
             bottom.Controls.Add(sendBtn);
 
-            Button settingsBtn = MakeButton("设置", Color.FromArgb(228, 240, 250), Theme.AccentDeep);
+            settingsBtn = MakeButton("设置", Color.FromArgb(228, 240, 250), Theme.AccentDeep);
             settingsBtn.SetBounds(Dpi.X(322), Dpi.X(52), Dpi.X(90), Dpi.X(32));
             settingsBtn.Click += delegate { OpenSettings(); };
             bottom.Controls.Add(settingsBtn);
@@ -851,6 +867,23 @@ namespace JingqianShell
                 Native.ReleaseCapture();
                 Native.SendMessage(Handle, 0xA1, (IntPtr)0x2, IntPtr.Zero);
             }
+        }
+
+        Image LoadSmallIcon()
+        {
+            try
+            {
+                string png = Path.Combine(Application.StartupPath, "icon.png");
+                if (File.Exists(png)) return Image.FromFile(png);
+            }
+            catch { }
+            try
+            {
+                string ico = Path.Combine(Application.StartupPath, "icon.ico");
+                if (File.Exists(ico)) return new Icon(ico, 20, 20).ToBitmap();
+            }
+            catch { }
+            return null;
         }
 
         void ApplyRound()
@@ -1075,7 +1108,7 @@ namespace JingqianShell
             try
             {
                 string ico = Path.Combine(Application.StartupPath, "icon.ico");
-                if (File.Exists(ico)) Icon = new Icon(ico);
+                if (File.Exists(ico)) Icon = new Icon(ico, 32, 32);
             }
             catch { }
             BuildUi();
@@ -1548,7 +1581,7 @@ namespace JingqianShell
                 {
                     f.VerifyOnly = true;
                     f.StartPosition = FormStartPosition.Manual;
-                    f.Location = new Point(-3200, -3200);
+                    f.Location = new Point(-30000, -30000);
                     f.ShowInTaskbar = false;
                     f.Show();
                     Application.DoEvents();
@@ -1568,7 +1601,7 @@ namespace JingqianShell
                                 using (Graphics g = Graphics.FromImage(bmp))
                                 {
                                     IntPtr hdc = g.GetHdc();
-                                    bool ok = Native.PrintWindow(f.Handle, hdc, 2);
+                                    bool ok = Native.PrintWindow(f.Handle, hdc, 0);
                                     g.ReleaseHdc(hdc);
                                     if (!ok)
                                     {
@@ -1586,14 +1619,21 @@ namespace JingqianShell
                         // 真跑一条用工具的任务，把「调用了什么工具 + 结果」画进窗口再截一张
                         try
                         {
-                            f.VerifyToolTask("在工作目录建 verify-" + DateTime.Now.ToString("HHmmss") + ".txt，内容写 hello 软件版");
+                            // 先清掉旧的 out.txt，避免命中 P1「覆盖要确认」，保证演示能真写成功
+                            try
+                            {
+                                string old = Path.Combine(repo, "data", "workspace", "out.txt");
+                                if (File.Exists(old)) File.Delete(old);
+                            }
+                            catch { }
+                            f.VerifyToolTask("在工作目录建一个 out.txt，里面写：hello 软件版");
                             string png2 = Path.Combine(repo, "desktop", "_verify-tools.png");
                             using (Bitmap bmp = new Bitmap(f.Width, f.Height))
                             {
                                 using (Graphics g = Graphics.FromImage(bmp))
                                 {
                                     IntPtr hdc = g.GetHdc();
-                                    bool ok = Native.PrintWindow(f.Handle, hdc, 2);
+                                    bool ok = Native.PrintWindow(f.Handle, hdc, 0);
                                     g.ReleaseHdc(hdc);
                                     if (!ok) { hdc = g.GetHdc(); Native.PrintWindow(f.Handle, hdc, 0); g.ReleaseHdc(hdc); }
                                 }

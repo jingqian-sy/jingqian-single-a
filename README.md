@@ -6,9 +6,51 @@
 
 > 一个住在你自己电脑里的中文智能体：会记事、会算账、会动手，但手上有一条红线。
 
+## 两个形态：软件版（主）和插件版（次）
+
+**① 软件版：独立窗口，双击就开**（给普通用户用的形态）
+
+```powershell
+# 编（系统自带 .NET Framework，不引 NuGet、不用 WebView2）
+desktop\build-desktop.cmd
+
+# 装：拷程序 + 建桌面/开始菜单快捷方式（图标用 desktop\icon.ico）
+powershell -ExecutionPolicy Bypass -File 安装.ps1
+```
+
+装完桌面「鲸倩」双击就开，不跳浏览器。窗口里能聊天、看工具调用、搜/删记忆、改设置
+（模型/密钥/沙盒档位/命令白名单/记忆开关/可选 QQ 桥接），底部一条数据栏显示
+tok/s、缓存、上下文、今日调用、走哪家、时钟。详见 [docs/软件版.md](docs/软件版.md)。
+
+![软件版界面](docs/assets/desktop.png)
+
+<sub>真实截图（离屏验证时抓的）：顶部按钮、消息区、工具调用小字、输入框、底部数据栏。
+跑 `desktop\鲸倩.exe --verify` 可以自己复现这四项自检（不弹窗）。</sub>
+
+**② 插件版：一行配置挂到 MCP 客户端**（DSH / Cherry Studio 这类）
+
+```json
+{
+  "mcpServers": {
+    "jingqian": {
+      "command": "node",
+      "args": ["D:\\鲸倩开源-雏版\\src\\mcp\\server.js"]
+    }
+  }
+}
+```
+
+挂上后有 4 个工具：`ask` / `memory_search` / `memory_remember` / `stats`。
+和软件版共用同一台本机服务、同一份记忆，见 [docs/插件版.md](docs/插件版.md)。
+
+**③ 网页版：开发调试用，不是给用户的功能形态**
+
+`node src/server.js` 后开 `http://127.0.0.1:7889`。三个入口（桌面 / 插件 / 网页）都是一套服务，
+网页版别写进用户教程，也别拿它当发布形态。
+
 ## 30 秒看懂
 
-**这是什么**：一个本地优先的中文智能体，Node 写的，零依赖，`node src/server.js` 就起来。
+**这是什么**：一个本地优先的中文智能体，Node 写的，零依赖，服务一跑就通。
 它能记住你（不是把聊天记录塞回上下文），能读写文件、跑白名单命令，动手前会过四级红线，
 每次调模型都记账。
 
@@ -17,18 +59,8 @@
 - **真记得**：记忆会老、会淡、会被整理成「一件事」，钉住的约定永不遗忘。
 - **真省钱**：粗活交给本地 8B，值钱的判断才上云端；同一批 55 题 × 2 遍，
   本地实测 **0 元**，同 tokens 全走云端约 **0.78 元**（[算法与来源](docs/省钱对比.md)）。
-- **能开口**：网页上点麦克风说话，识别成文字自动发送，回复自动念出来（系统语音，离线可用）。
 - **真能验**：55 题评测全部机器判定（看盘、看审计、看事件层），每题跑两遍，
   [成绩和失败项](data/report.md)都摆着，不是「模型说自己过了」。
-
-```bash
-node src/server.js   # → http://127.0.0.1:7889
-./demo.cmd           # 30 秒演示：记一件事 → 问回来 → 跑一条白名单命令
-```
-
-![鲸倩界面](docs/assets/screenshot.png)
-
-<sub>真实截图：本地跑起来的样子（1200×820）。状态栏那行是记忆条数、事件条数、沙盒档位、当前模型。</sub>
 
 **三步看清它记得住**（同一台机器真跑的三帧，不是示意图）：
 
@@ -40,10 +72,10 @@ node src/server.js   # → http://127.0.0.1:7889
 <summary>不想看长文？这里是最短路径</summary>
 
 ```bash
-node src/server.js                          # 起服务（不需要 npm install）
-node evals/selfcheck.js                     # 看模型/记忆/沙盒状态
-node evals/ci.js                            # 不需要密钥的全套检查
-node demo.js                                # 三步演示
+desktop\build-desktop.cmd                   # 编软件版（需要系统自带 .NET Framework）
+powershell -ExecutionPolicy Bypass -File 安装.ps1   # 装软件版 + 快捷方式
+node src/mcp/server.js                      # 插件版（MCP，stdin/stdout）
+node evals/ci.js                            # 不需要密钥的全套检查（11 秒）
 ```
 
 模型二选一：本机 `ollama pull qwen3:8b`，或在 `config.json` 里填一家云端 key。

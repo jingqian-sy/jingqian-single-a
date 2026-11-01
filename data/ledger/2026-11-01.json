@@ -2,17 +2,17 @@
   "date": "2026-11-01",
   "providers": {
     "ollama-8b": {
-      "calls": 47,
-      "prompt_tokens": 46812,
-      "completion_tokens": 10922,
+      "calls": 65,
+      "prompt_tokens": 74389,
+      "completion_tokens": 15376,
       "cost": 0,
       "model": "qwen3-8b-tool"
     }
   },
   "total": {
-    "calls": 47,
-    "prompt_tokens": 46812,
-    "completion_tokens": 10922,
+    "calls": 65,
+    "prompt_tokens": 74389,
+    "completion_tokens": 15376,
     "cost": 0
   }
 }
