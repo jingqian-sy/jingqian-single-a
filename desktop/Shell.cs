@@ -3,8 +3,11 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Speech.Recognition;
+using System.Speech.Synthesis;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -110,6 +113,43 @@ namespace JingqianShell
             }
             TextRenderer.DrawText(g, Text, Font, new Rectangle(0, 0, Width, Height), fore,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+        }
+    }
+
+    // 本机朗读（System.Speech）：不联网、不要 key；优先中文声音
+    static class Speech
+    {
+        public static string ZhVoiceName()
+        {
+            try
+            {
+                using (SpeechSynthesizer s = new SpeechSynthesizer())
+                {
+                    string first = "";
+                    foreach (InstalledVoice v in s.GetInstalledVoices())
+                    {
+                        if (!v.Enabled) continue;
+                        if (first.Length == 0) first = v.VoiceInfo.Name;
+                        if (v.VoiceInfo.Culture != null && v.VoiceInfo.Culture.Name.StartsWith("zh")) return v.VoiceInfo.Name;
+                    }
+                    return first;
+                }
+            }
+            catch { return ""; }
+        }
+
+        public static SpeechSynthesizer Make(string name, int rate)
+        {
+            SpeechSynthesizer s = new SpeechSynthesizer();
+            try
+            {
+                string use = name;
+                if (string.IsNullOrEmpty(use)) use = ZhVoiceName();
+                if (!string.IsNullOrEmpty(use)) s.SelectVoice(use);
+            }
+            catch { }
+            try { s.Rate = Math.Max(-10, Math.Min(10, rate)); } catch { }
+            return s;
         }
     }
 
@@ -726,6 +766,14 @@ namespace JingqianShell
         public string AutoSendText;
         System.Windows.Forms.Timer statusTimer;
         bool sending;
+        // 语音：本机朗读 + 麦克风听写（不联网）
+        bool voiceOn;
+        string voiceName = "";
+        int voiceRate = 0;
+        SpeechSynthesizer tts;
+        Button btnVoice;
+        Button btnMic;
+        bool recognizing;
 
         public MainForm(string repoRoot, string baseUrl, bool openSettings)
         {
@@ -768,6 +816,7 @@ namespace JingqianShell
 
             BuildUi();
             BuildTray();
+            LoadVoiceConfig();
 
             // 截图/验收用：JQ_UI_ATTACH=路径1;路径2 自动贴上附件（等价于拖进来）
             string uiAttach = Environment.GetEnvironmentVariable("JQ_UI_ATTACH");
@@ -853,6 +902,7 @@ namespace JingqianShell
             FormClosing += delegate
             {
                 if (tray != null) { tray.Visible = false; tray.Dispose(); tray = null; }
+                try { if (tts != null) { tts.SpeakAsyncCancelAll(); tts.Dispose(); tts = null; } } catch { }
             };
 
             statusTimer = new System.Windows.Forms.Timer();
@@ -912,6 +962,7 @@ namespace JingqianShell
             ToolBtn(toolPanel, ref tx, "状态", false, delegate { ShowStatus(); });
             ToolBtn(toolPanel, ref tx, "记忆", false, delegate { OpenMemory(); });
             ToolBtn(toolPanel, ref tx, "设置", true, delegate { OpenSettings(); });
+            btnVoice = ToolBtn(toolPanel, ref tx, "朗读", false, delegate { ToggleVoice(); });
 
             dragHintLabel = new Label();
             dragHintLabel.AutoSize = false;
@@ -1023,6 +1074,12 @@ namespace JingqianShell
             sendBtn.Click += delegate { SendCurrent(); };
             bottom.Controls.Add(sendBtn);
 
+            // 麦克风听写：本机识别（zh-CN），不联网
+            btnMic = MakeButton("说话", Color.White, Theme.AccentDeep);
+            btnMic.Font = Theme.Ui(9f, true);
+            btnMic.Click += delegate { MicOnce(); };
+            bottom.Controls.Add(btnMic);
+
             // 底部数据栏：tok/s · 缓存 · 上下文 · 今日调用 · 走哪家 · 时钟
             statsLabel = new Label();
             statsLabel.AutoSize = false;
@@ -1118,12 +1175,14 @@ namespace JingqianShell
                 attachBar.Visible = hasAttach;
                 attachBar.SetBounds(Dpi.X(14), Dpi.X(9), Math.Max(Dpi.X(120), bottom.ClientSize.Width - Dpi.X(28)), Dpi.X(26));
             }
-            int rightW = Dpi.X(86);
+            int micW = Dpi.X(64);
+            int rightW = Dpi.X(86) + Dpi.X(8) + micW;
             int avail = Math.Max(Dpi.X(160), bottom.ClientSize.Width - Dpi.X(28) - rightW - Dpi.X(10));
             inputWrap.SetBounds(Dpi.X(14), inputTop, avail, Dpi.X(64));
             input.SetBounds(Dpi.X(12), Dpi.X(9), avail - Dpi.X(24), Dpi.X(46));
             inputHint.SetBounds(Dpi.X(15), Dpi.X(11), avail - Dpi.X(30), Dpi.X(24));
-            sendBtn.SetBounds(inputWrap.Right + Dpi.X(10), inputTop + Dpi.X(11), rightW, Dpi.X(42));
+            btnMic.SetBounds(inputWrap.Right + Dpi.X(10), inputTop + Dpi.X(11), micW, Dpi.X(42));
+            sendBtn.SetBounds(btnMic.Right + Dpi.X(8), inputTop + Dpi.X(11), Dpi.X(86), Dpi.X(42));
             statsLabel.SetBounds(Dpi.X(16), bottom.Height - Dpi.X(24), Math.Max(Dpi.X(160), bottom.ClientSize.Width - Dpi.X(120)), Dpi.X(18));
             clockLabel.SetBounds(bottom.ClientSize.Width - Dpi.X(86), bottom.Height - Dpi.X(24), Dpi.X(70), Dpi.X(18));
         }
@@ -1586,6 +1645,130 @@ namespace JingqianShell
             catch { }
         }
 
+        // ---------- 语音：本机朗读 + 麦克风听写（都不联网） ----------
+        void LoadVoiceConfig()
+        {
+            try
+            {
+                Dictionary<string, object> r = api.GetConfig(4000);
+                Dictionary<string, object> cfg = (r.ContainsKey("config") && r["config"] is Dictionary<string, object>)
+                    ? (Dictionary<string, object>)r["config"] : r;
+                object v;
+                if (cfg.TryGetValue("voice", out v) && v is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> vo = (Dictionary<string, object>)v;
+                    voiceOn = vo.ContainsKey("enabled") && Convert.ToBoolean(vo["enabled"]);
+                    voiceName = vo.ContainsKey("voice") ? Convert.ToString(vo["voice"]) : "";
+                    voiceRate = vo.ContainsKey("rate") ? Convert.ToInt32(vo["rate"]) : 0;
+                }
+            }
+            catch { }
+            UpdateVoiceButton();
+        }
+
+        void UpdateVoiceButton()
+        {
+            FlatBtn fb = btnVoice as FlatBtn;
+            if (fb == null) return;
+            fb.NormalBack = voiceOn ? Theme.Accent : Color.White;
+            fb.NormalFore = voiceOn ? Color.White : Theme.AccentDeep;
+            fb.NormalBorder = voiceOn ? Color.Transparent : Theme.Border;
+            fb.Invalidate();
+        }
+
+        void ToggleVoice()
+        {
+            voiceOn = !voiceOn;
+            UpdateVoiceButton();
+            if (!voiceOn)
+            {
+                try { if (tts != null) tts.SpeakAsyncCancelAll(); } catch { }
+            }
+            caption.StatusText = voiceOn ? "朗读已开（点「朗读」可关）" : "朗读已关";
+            caption.Invalidate();
+        }
+
+        static string CleanForSpeech(string s)
+        {
+            if (String.IsNullOrEmpty(s)) return "";
+            s = s.Replace("**", "").Replace("`", "").Replace("#", "").Replace("* ", "");
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"工具 .*", "");
+            return s.Trim();
+        }
+
+        void SpeakReply(string text)
+        {
+            if (!voiceOn) return;
+            string t = CleanForSpeech(text);
+            if (t.Length == 0) return;
+            if (t.Length > 400) t = t.Substring(0, 400);
+            try
+            {
+                if (tts == null) tts = Speech.Make(voiceName, voiceRate);
+                tts.SpeakAsyncCancelAll();
+                tts.SpeakAsync(t);
+            }
+            catch (Exception ex)
+            {
+                caption.StatusText = "朗读失败：" + ex.Message + "（设置里可以换声音）";
+                caption.Invalidate();
+            }
+        }
+
+        // 点一下「说话」：听一句中文，识别完填进输入框（不直接发送，给他看一眼改的机会）
+        void MicOnce()
+        {
+            if (recognizing) return;
+            recognizing = true;
+            btnMic.Enabled = false;
+            btnMic.Text = "听…";
+            caption.StatusText = "在听，说完停一下…";
+            caption.Invalidate();
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string heard = "";
+                string err = "";
+                try
+                {
+                    using (SpeechRecognitionEngine rec = new SpeechRecognitionEngine(new CultureInfo("zh-CN")))
+                    {
+                        rec.SetInputToDefaultAudioDevice();
+                        rec.LoadGrammar(new DictationGrammar());
+                        rec.InitialSilenceTimeout = TimeSpan.FromSeconds(5);
+                        rec.BabbleTimeout = TimeSpan.FromSeconds(4);
+                        rec.EndSilenceTimeout = TimeSpan.FromSeconds(0.9);
+                        RecognitionResult rr = rec.Recognize(TimeSpan.FromSeconds(9));
+                        if (rr != null) heard = rr.Text.Trim();
+                        else err = "没听清，再说一次？";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    err = "麦克风用不了：" + ex.Message + "（系统里得有麦克风和中文语音识别）";
+                }
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        recognizing = false;
+                        btnMic.Enabled = true;
+                        btnMic.Text = "说话";
+                        if (heard.Length > 0)
+                        {
+                            input.Text = input.Text.Trim().Length > 0 ? (input.Text + heard) : heard;
+                            UpdateInputHint();
+                            input.Focus();
+                            input.SelectionStart = input.Text.Length;
+                            caption.StatusText = "听到了：" + heard;
+                        }
+                        else caption.StatusText = err;
+                        caption.Invalidate();
+                    });
+                }
+                catch { }
+            });
+        }
+
         // 同步把历史铺进气泡（返回铺了几条）；先 web（网页/软件版共用这个 session），
         // 没有再看 desktop（老版本软件版留下的），保证「服务里有对话，窗口就能看见」。
         public int LoadHistoryNow()
@@ -1700,6 +1883,7 @@ namespace JingqianShell
                             chatView.AddNote("工具 " + name + " · 结果：" + result);
                         }
                         chatView.Add(false, reply);
+                        SpeakReply(reply);
                         sending = false;
                         sendBtn.Text = "发送";
                         sendBtn.Enabled = true;
@@ -1785,9 +1969,15 @@ namespace JingqianShell
         FlatBtn btnApplyKey;
         Label lblQQStatus;
         Panel headerPanel, contentPanel, footerPanel;
-        FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnPersona, btnRefreshStats, btnTestModel;
+        FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnPersona, btnVoiceNav, btnRefreshStats, btnTestModel;
+        FlatBtn btnTestProv, btnSpeakTest;
         TextBox txtPersona;
         FlatBtn btnResetPersona;
+        Label lblProviderHint;
+        CheckBox chkVoice;
+        ComboBox cmbVoice;
+        TrackBar trkRate;
+        Label lblRate;
         Label lblStatus, lblTestResult;
         ComboBox cmbRouteMode;
         TextBox txtRouteOrder, txtMaxSteps, txtTopK, txtMaxHistory;
@@ -1859,6 +2049,11 @@ namespace JingqianShell
             btnPersona.Click += delegate { ScrollToPersona(); };
             headerPanel.Controls.Add(btnPersona);
 
+            btnVoiceNav = new FlatBtn("语音", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
+            btnVoiceNav.Font = Theme.Ui(8.5f, true);
+            btnVoiceNav.Click += delegate { ScrollToVoice(); };
+            headerPanel.Controls.Add(btnVoiceNav);
+
             footerPanel = new Panel();
             footerPanel.Dock = DockStyle.Bottom;
             footerPanel.Height = Dpi.X(58);
@@ -1888,7 +2083,7 @@ namespace JingqianShell
             contentPanel.BringToFront();
 
             BuildUi();
-            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(1460));
+            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(1740));
             LayoutChrome();
             LoadConfig();
             ApplyRound();
@@ -1898,6 +2093,8 @@ namespace JingqianShell
                 Shown += delegate { ScrollToConsole(); };
             if (Environment.GetEnvironmentVariable("JQ_CFG_SCROLL") == "2")
                 Shown += delegate { ScrollToPersona(); };
+            if (Environment.GetEnvironmentVariable("JQ_CFG_SCROLL") == "3")
+                Shown += delegate { ScrollToVoice(); };
         }
 
         void LayoutChrome()
@@ -1907,7 +2104,11 @@ namespace JingqianShell
             if (btnConsole != null)
             {
                 btnConsole.SetBounds(headerPanel.Width - Dpi.X(42) - Dpi.X(92), Dpi.X(9), Dpi.X(84), Dpi.X(28));
-                if (btnPersona != null) btnPersona.SetBounds(btnConsole.Left - Dpi.X(6) - Dpi.X(64), Dpi.X(9), Dpi.X(64), Dpi.X(28));
+                if (btnPersona != null)
+                {
+                    btnPersona.SetBounds(btnConsole.Left - Dpi.X(6) - Dpi.X(64), Dpi.X(9), Dpi.X(64), Dpi.X(28));
+                    if (btnVoiceNav != null) btnVoiceNav.SetBounds(btnPersona.Left - Dpi.X(6) - Dpi.X(64), Dpi.X(9), Dpi.X(64), Dpi.X(28));
+                }
             }
             if (btnSave != null)
             {
@@ -1951,6 +2152,8 @@ namespace JingqianShell
             Hint("服务地址一般不用改；改端口后要重启服务才生效。", 14, 94);
 
             Section("模型提供方", 14, 130);
+            btnTestProv = SmallBtn("测试连接", 284, 124, 88, false);
+            btnTestProv.Click += delegate { TestProvider(); };
             btnApplyKey = SmallBtn("申请密钥", 376, 124, 88, true);
             btnApplyKey.Click += delegate { OpenApplyUrl(); };
             btnAdd = SmallBtn("新增", 470, 124, 70, false);
@@ -1981,7 +2184,13 @@ namespace JingqianShell
                 }
             };
             contentPanel.Controls.Add(list);
-            Hint("新手：在上面选一家「未填」的 → 点「申请密钥」去拿 key → 粘到下面「密钥」→ 保存 → 关掉窗口重开就能用。", 14, 314);
+            lblProviderHint = new Label();
+            lblProviderHint.AutoSize = false;
+            lblProviderHint.Font = Theme.Ui(8.5f, false);
+            lblProviderHint.ForeColor = Theme.Dim;
+            lblProviderHint.SetBounds(Dpi.X(14), Dpi.X(314), Dpi.X(596), Dpi.X(40));
+            lblProviderHint.Text = "新手：选一家「未填」的 → 点「申请密钥」去拿 key → 粘到下面「密钥」→ 保存 → 关掉窗口重开就能用。";
+            contentPanel.Controls.Add(lblProviderHint);
 
             Section("选中的提供方", 14, 352);
             Cap("base", 14, 382);
@@ -2157,6 +2366,69 @@ namespace JingqianShell
             ph.Text = "内置默认：叫鲸倩、短句口语、不列清单、不说自己是什么模型、不知道就说不确定。";
             ph.SetBounds(Dpi.X(114), Dpi.X(1412), Dpi.X(500), Dpi.X(24));
             contentPanel.Controls.Add(ph);
+
+            // ---------- 语音 ----------
+            Section("语音", 14, 1470);
+            Hint("朗读她用系统自带的声音，不联网、不要 key；麦克风听写也是本机识别（中文），说完一段自动断句。", 14, 1498);
+
+            chkVoice = new CheckBox();
+            chkVoice.Text = "朗读她的回复";
+            chkVoice.Font = Theme.Ui(9.5f, false);
+            chkVoice.ForeColor = Theme.Text;
+            chkVoice.SetBounds(Dpi.X(14), Dpi.X(1540), Dpi.X(260), Dpi.X(24));
+            contentPanel.Controls.Add(chkVoice);
+
+            Cap("声音", 14, 1576);
+            cmbVoice = new ComboBox();
+            cmbVoice.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbVoice.Font = Theme.Ui(9.5f, false);
+            cmbVoice.SetBounds(Dpi.X(14), Dpi.X(1596), Dpi.X(330), Dpi.X(26));
+            contentPanel.Controls.Add(cmbVoice);
+
+            btnSpeakTest = SmallBtn("试听", 356, 1596, 70, false);
+            btnSpeakTest.Click += delegate { PreviewVoice(); };
+
+            Cap("语速", 440, 1576);
+            trkRate = new TrackBar();
+            trkRate.Minimum = -10;
+            trkRate.Maximum = 10;
+            trkRate.TickStyle = TickStyle.None;
+            trkRate.SetBounds(Dpi.X(440), Dpi.X(1594), Dpi.X(150), Dpi.X(28));
+            trkRate.ValueChanged += delegate { if (lblRate != null) lblRate.Text = trkRate.Value.ToString(); };
+            contentPanel.Controls.Add(trkRate);
+            lblRate = new Label();
+            lblRate.AutoSize = false;
+            lblRate.Font = Theme.Ui(9f, false);
+            lblRate.ForeColor = Theme.Dim;
+            lblRate.SetBounds(Dpi.X(596), Dpi.X(1600), Dpi.X(30), Dpi.X(22));
+            lblRate.Text = "0";
+            contentPanel.Controls.Add(lblRate);
+
+            Hint("聊天框右边「说话」按钮：点一下，说完停一下，识别结果会填进输入框（先看一眼再发送）。", 14, 1640);
+        }
+
+        void PreviewVoice()
+        {
+            try
+            {
+                string name = cmbVoice != null && cmbVoice.SelectedItem != null ? cmbVoice.SelectedItem.ToString().Split('|')[0].Trim() : "";
+                SpeechSynthesizer s = Speech.Make(name, trkRate != null ? trkRate.Value : 0);
+                s.SpeakAsyncCancelAll();
+                s.Speak("你好呀，我是鲸倩。这句话是用来试声音的。");
+                s.SpeakCompleted += delegate { try { s.Dispose(); } catch { } };
+            }
+            catch (Exception ex)
+            {
+                lblTestResult.Text = "试听失败：" + ex.Message;
+                lblTestResult.ForeColor = Theme.Warn;
+            }
+        }
+
+        void ScrollToVoice()
+        {
+            if (contentPanel == null || chkVoice == null) return;
+            contentPanel.AutoScrollPosition = new Point(0, chkVoice.Top);
+            contentPanel.Invalidate();
         }
 
         // 中控台：把运行状态拉下来拼成两行字（没连上就直说，不编）
@@ -2491,6 +2763,42 @@ namespace JingqianShell
                 txtQQToken.Text = qqToken;
                 UpdateQQState();
                 txtPersona.Text = cfg.ContainsKey("persona") ? Convert.ToString(cfg["persona"]) : "";
+                // 语音：列出本机声音，选中配置里那家（没配就选中文声音）
+                bool vOn = false;
+                string vName = "";
+                int vRate = 0;
+                if (cfg.TryGetValue("voice", out sub) && sub is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> vo = (Dictionary<string, object>)sub;
+                    vOn = vo.ContainsKey("enabled") && Convert.ToBoolean(vo["enabled"]);
+                    vName = vo.ContainsKey("voice") ? Convert.ToString(vo["voice"]) : "";
+                    vRate = vo.ContainsKey("rate") ? Convert.ToInt32(vo["rate"]) : 0;
+                }
+                chkVoice.Checked = vOn;
+                try
+                {
+                    cmbVoice.Items.Clear();
+                    string firstZh = "";
+                    using (SpeechSynthesizer s = new SpeechSynthesizer())
+                    {
+                        foreach (InstalledVoice v in s.GetInstalledVoices())
+                        {
+                            if (!v.Enabled) continue;
+                            string label = v.VoiceInfo.Name + " | " + v.VoiceInfo.Culture;
+                            cmbVoice.Items.Add(label);
+                            if (firstZh.Length == 0 && v.VoiceInfo.Culture != null && v.VoiceInfo.Culture.Name.StartsWith("zh")) firstZh = label;
+                        }
+                    }
+                    string want = vName.Length > 0 ? vName : firstZh;
+                    int sel = -1;
+                    for (int i = 0; i < cmbVoice.Items.Count; i++)
+                        if (cmbVoice.Items[i].ToString().StartsWith(want)) { sel = i; break; }
+                    if (sel >= 0) cmbVoice.SelectedIndex = sel;
+                    else if (cmbVoice.Items.Count > 0) cmbVoice.SelectedIndex = 0;
+                }
+                catch { }
+                trkRate.Value = Math.Max(-10, Math.Min(10, vRate));
+                if (lblRate != null) lblRate.Text = trkRate.Value.ToString();
                 RefreshStats();
             }
             catch (Exception ex)
@@ -2554,6 +2862,54 @@ namespace JingqianShell
                 lblTestResult.Text = "打不开浏览器：" + ex.Message + "（手动访问 " + url + "）";
                 lblTestResult.ForeColor = Theme.Warn;
             }
+        }
+
+        // 在设置页直接测当前这家能不能通（新手填完 key 最想确认这个）
+        void TestProvider()
+        {
+            if (current < 0 || current >= providers.Count)
+            {
+                lblProviderHint.Text = "先在上面选一家。";
+                lblProviderHint.ForeColor = Theme.Warn;
+                return;
+            }
+            CommitCurrent(current);
+            Dictionary<string, object> p = providers[current];
+            Dictionary<string, object> pr = new Dictionary<string, object>();
+            pr["name"] = Get(p, "name");
+            pr["base"] = txtBase.Text.Trim();
+            pr["model"] = txtModel.Text.Trim();
+            pr["key"] = txtKey.Text;
+            Dictionary<string, object> body = new Dictionary<string, object>();
+            body["provider"] = pr;
+            btnTestProv.Enabled = false;
+            lblProviderHint.ForeColor = Theme.Dim;
+            lblProviderHint.Text = "正在测「" + Get(p, "name") + "」…";
+            Application.DoEvents();
+            try
+            {
+                Dictionary<string, object> r = api.Post("/api/config/test", body, 30000);
+                bool okNow = r.ContainsKey("ok") && Convert.ToBoolean(r["ok"]);
+                string ms = r.ContainsKey("ms") ? Convert.ToString(r["ms"]) + " ms" : "";
+                if (okNow)
+                {
+                    lblProviderHint.Text = "通了（" + ms + "）。点下面「保存」→ 关掉窗口重开就能用这家。";
+                    lblProviderHint.ForeColor = Color.FromArgb(60, 150, 100);
+                }
+                else
+                {
+                    string err = r.ContainsKey("error") ? Convert.ToString(r["error"])
+                        : ("HTTP " + Convert.ToString(r.ContainsKey("status") ? r["status"] : "?"));
+                    lblProviderHint.Text = "没通：" + err + "（key 对不对、base 有没有抄错）";
+                    lblProviderHint.ForeColor = Theme.Warn;
+                }
+            }
+            catch (Exception ex)
+            {
+                lblProviderHint.Text = "测失败：" + ex.Message;
+                lblProviderHint.ForeColor = Theme.Warn;
+            }
+            finally { btnTestProv.Enabled = true; }
         }
 
         void UpdateQQState()
@@ -2665,6 +3021,24 @@ namespace JingqianShell
         {
             try
             {
+                int portNum;
+                if (!int.TryParse(txtPort.Text.Trim(), out portNum) || portNum < 1024 || portNum > 65535)
+                {
+                    MessageBox.Show(this, "端口要填 1024~65535 之间的数字（一般保持 7889 就行）。",
+                        "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                if (current >= 0 && current < providers.Count)
+                {
+                    string nb = txtBase.Text.Trim(), nm = txtModel.Text.Trim();
+                    if (nb.Length == 0 || nm.Length == 0)
+                    {
+                        MessageBox.Show(this, "选中的这家还没填「base」和「模型」。\n\n"
+                            + "内置的几家都已经写好了，正常不用改；如果是自己新增的，把接口地址和模型名填上再保存。",
+                            "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
                 if (current >= 0 && current < providers.Count)
                 {
                     providers[current]["base"] = txtBase.Text.Trim();
@@ -2706,6 +3080,11 @@ namespace JingqianShell
                 rb["order"] = order;
                 body["route"] = rb;
                 body["persona"] = txtPersona.Text.Trim();
+                Dictionary<string, object> vb = new Dictionary<string, object>();
+                vb["enabled"] = chkVoice.Checked;
+                vb["voice"] = (cmbVoice.SelectedItem != null) ? cmbVoice.SelectedItem.ToString().Split('|')[0].Trim() : "";
+                vb["rate"] = trkRate.Value;
+                body["voice"] = vb;
                 Dictionary<string, object> qb = new Dictionary<string, object>();
                 qb["enabled"] = qqConnected;
                 qb["gateway"] = (qqGateway.Length > 0 ? qqGateway : txtQQUrl.Text.Trim());
@@ -3037,6 +3416,25 @@ namespace JingqianShell
 
         // 无界面自测：服务 / 窗口（离屏创建 + PrintWindow 抓图）/ 真发消息 / 设置保存真改 config.json
         // 不把窗口弹到用户眼前：窗口建在屏幕外、不进任务栏，抓完立刻关。
+        // 读「服务当前用的配置」里第一家的模型名（不读本地文件：安装版和仓库可能是两份配置）
+        static string FirstModelViaApi(ApiClient api)
+        {
+            try
+            {
+                Dictionary<string, object> r = api.GetConfig(5000);
+                Dictionary<string, object> cfg = (r.ContainsKey("config") && r["config"] is Dictionary<string, object>)
+                    ? (Dictionary<string, object>)r["config"] : r;
+                object arr;
+                if (cfg.TryGetValue("providers", out arr) && arr is object[] && ((object[])arr).Length > 0)
+                {
+                    Dictionary<string, object> p = ((object[])arr)[0] as Dictionary<string, object>;
+                    if (p != null && p.ContainsKey("model")) return Convert.ToString(p["model"]);
+                }
+            }
+            catch { }
+            return "";
+        }
+
         static int RunVerify(string repo, string baseUrl)
         {
             int fail = 0;
@@ -3143,30 +3541,15 @@ namespace JingqianShell
             try
             {
                 ApiClient api = new ApiClient(baseUrl);
-                JavaScriptSerializer js = new JavaScriptSerializer();
-                string cfgFile = Path.Combine(repo, "config.json");
-                Dictionary<string, object> cfg = js.DeserializeObject(File.ReadAllText(cfgFile)) as Dictionary<string, object>;
-                object arr;
-                string before = "";
-                if (cfg != null && cfg.TryGetValue("providers", out arr) && arr is object[])
-                {
-                    object[] ps = (object[])arr;
-                    if (ps.Length > 0 && ps[0] is Dictionary<string, object>)
-                        before = Convert.ToString(((Dictionary<string, object>)ps[0])["model"]);
-                }
                 string probe = "qwen3-8b-tool-verify";
+                // 别读本地文件：服务可能用的是安装版那份 config.json，按接口读才准
+                string before = FirstModelViaApi(api);
                 SettingsForm.SaveModelViaApi(api, probe);
-                Dictionary<string, object> cfg2 = js.DeserializeObject(File.ReadAllText(cfgFile)) as Dictionary<string, object>;
-                string after = "";
-                if (cfg2 != null && cfg2.TryGetValue("providers", out arr) && arr is object[])
-                    after = Convert.ToString(((Dictionary<string, object>)((object[])arr)[0])["model"]);
+                string after = FirstModelViaApi(api);
                 Console.WriteLine("CONFIG before=" + before + " -> after=" + after + " (设置窗同一条保存路径)");
                 if (after != probe) fail++;
                 if (before.Length > 0) SettingsForm.SaveModelViaApi(api, before);
-                Dictionary<string, object> cfg3 = js.DeserializeObject(File.ReadAllText(cfgFile)) as Dictionary<string, object>;
-                string restored = "";
-                if (cfg3 != null && cfg3.TryGetValue("providers", out arr) && arr is object[])
-                    restored = Convert.ToString(((Dictionary<string, object>)((object[])arr)[0])["model"]);
+                string restored = FirstModelViaApi(api);
                 Console.WriteLine("CONFIG restored=" + restored + (restored == before ? " OK" : " FAIL"));
                 if (restored != before) fail++;
             }

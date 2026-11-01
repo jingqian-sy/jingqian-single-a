@@ -292,6 +292,14 @@ async function handleApi(req, res, url) {
         if (body.persona.trim()) next.persona = body.persona;
         else delete next.persona;
       }
+      // 语音：朗读开关/声音/语速（软件版用，网页版不读）
+      if (body.voice && typeof body.voice === 'object') {
+        next.voice = Object.assign({ enabled: false, voice: '', rate: 0 }, next.voice || {}, {
+          enabled: !!body.voice.enabled,
+          voice: String(body.voice.voice || ''),
+          rate: Number(body.voice.rate) || 0
+        });
+      }
       if (body.sandbox) next.sandbox = Object.assign({}, next.sandbox, { mode: String(body.sandbox.mode || 'none') });
       if (body.qq) {
         // QQ 适配层配置（默认关）：网关地址/令牌/白名单/群白名单

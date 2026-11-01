@@ -134,6 +134,14 @@ function writeCfg(provider, extra) {
     const cfgGet = await (await fetch('http://127.0.0.1:' + APP_PORT + '/api/config')).json();
     const p0 = cfgGet && cfgGet.config && cfgGet.config.providers && cfgGet.config.providers[0];
     ok(p0 && p0.name === 'mock', '中控台读的是 JQ_CONFIG 指定的配置（不串到仓库 config.json）', JSON.stringify(p0 && p0.name));
+    // 语音配置能存能读（软件版朗读用）
+    await fetch('http://127.0.0.1:' + APP_PORT + '/api/config', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ voice: { enabled: true, voice: 'Microsoft Huihui Desktop', rate: 3 } })
+    });
+    const cfgVoice = await (await fetch('http://127.0.0.1:' + APP_PORT + '/api/config')).json();
+    const vv = cfgVoice && cfgVoice.config && cfgVoice.config.voice;
+    ok(vv && vv.enabled === true && vv.rate === 3 && /Huihui/.test(vv.voice), '语音配置（开关/声音/语速）能存能读', JSON.stringify(vv));
     const r1 = await (await fetch('http://127.0.0.1:' + APP_PORT + '/api/chat', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message: '看看这个日志', attachments: [txt] })

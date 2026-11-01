@@ -6,12 +6,13 @@ cd /d "%~dp0"
 rem 鲸倩 · 软件版编译脚本
 rem 用系统自带的 .NET Framework csc 编，单文件 WinForms，不引任何 NuGet / WebView2。
 
+set "SPEECH=%WINDIR%\Microsoft.NET\assembly\GAC_MSIL\System.Speech\v4.0_4.0.0.0__31bf3856ad364e35\System.Speech.dll"
 set "CSC64=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 set "CSC32=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe"
 set "CSC="
 
 if exist "%CSC64%" set "CSC=%CSC64%"
-if not defined CSC if exist "%CSC32%" set "CSC=%CSC32%"
+if not exist "%SPEECH%" echo   [!] System.Speech.dll not found (needs .NET 4) - speech features will not build
 
 if not defined CSC (
   echo.
@@ -36,7 +37,7 @@ echo   用 csc：%CSC%
 "%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ ^
   /out:"%~dp0鲸倩.exe" ^
   /win32icon:"%~dp0icon.ico" ^
-  /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll ^
+  /r:"%SPEECH%" /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll ^
   "%~dp0Shell.cs"
 
 if errorlevel 1 (
