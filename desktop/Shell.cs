@@ -833,6 +833,7 @@ namespace JingqianShell
                         if (input != null) { input.Select(); input.Focus(); }
                     }
                     if (ok && !VerifyOnly) CheckRadar();
+                    if (ok && Environment.GetEnvironmentVariable("JQ_DEMO_SEQ") == "1") StartDemoSequence();
                     if (openSettings) OpenSettings();
                     if (!string.IsNullOrEmpty(AutoSendText))
                     {
@@ -1510,6 +1511,34 @@ namespace JingqianShell
                 bool ok = keeper.Ensure(25000);
                 try { BeginInvoke((MethodInvoker)delegate { done(ok); }); } catch { }
             });
+        }
+
+        // 录演示用：按剧本自己发几条（JQ_DEMO_SEQ=1），截图进程在外面按帧抓，不抢他的鼠标键盘
+        void StartDemoSequence()
+        {
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                Thread.Sleep(900);
+                DemoSend("记住：我下周三要交房租");
+                DemoWait();
+                Thread.Sleep(700);
+                DemoSend("我什么时候要交房租？");
+                DemoWait();
+                Thread.Sleep(700);
+                DemoSend("帮我把这周要交的房租和周四复查排个先后");
+                DemoWait();
+                Thread.Sleep(1800);
+            });
+        }
+
+        void DemoSend(string text)
+        {
+            try { BeginInvoke((MethodInvoker)delegate { SendText(text); }); } catch { }
+        }
+
+        void DemoWait()
+        {
+            for (int i = 0; i < 300 && sending; i++) Thread.Sleep(150);
         }
 
         // 同步把历史铺进气泡（返回铺了几条）；先 web（网页/软件版共用这个 session），
