@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鲸倩 · 单A 雏版</title>
+<style>
+  :root { --bg:#f6f4ee; --ink:#232323; --dim:#8a8578; --line:#e3dfd3; --accent:#2f6f6a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  header { padding:18px 22px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; font-weight:600; letter-spacing:.5px; }
+  header .meta { color:var(--dim); font-size:12px; }
+  main { max-width:820px; margin:0 auto; padding:18px 16px 120px; }
+  .msg { margin:14px 0; display:flex; gap:10px; }
+  .msg .who { flex:0 0 44px; color:var(--dim); font-size:12px; padding-top:4px; }
+  .msg .body { white-space:pre-wrap; word-break:break-word; }
+  .msg.me .body { color:var(--accent); }
+  .stats { color:var(--dim); font-size:12px; margin-top:6px; }
+  form { position:fixed; left:0; right:0; bottom:0; background:linear-gradient(#f6f4ee00,#f6f4ee 30%); padding:14px 16px 20px; }
+  .row { max-width:820px; margin:0 auto; display:flex; gap:8px; }
+  input[type=text] { flex:1; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; font-size:15px; }
+  button { padding:12px 18px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .hint { max-width:820px; margin:6px auto 0; color:var(--dim); font-size:12px; }
+  .err { color:#a33; }
+.settingLink { margin-left:10px; font-size:13px; color:#2f6f6a; border:1px solid #cfe3dd; border-radius:6px; padding:2px 8px; text-decoration:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>鲸倩 · 单A 雏版</h1>
+  <a href="/console.html" class="settingLink">⚙ 设置</a>
+  <span class="meta" id="meta">正在自检…</span>
+</header>
+
+<main id="log">
+  <div class="msg greet">
+    <div class="who">她</div>
+    <div class="body">在呢。这儿是本地的雏版：会记事、能读写 data/workspace、动手之前看红线。
+试试让我记点事，再问我还记不记得。</div>
+  </div>
+</main>
+
+<form id="f">
+  <div class="row">
+    <input type="text" id="q" placeholder="说点什么…" autocomplete="off" autofocus>
+    <button type="button" id="mic" title="按住说话（浏览器语音识别，中文）">🎙️</button>
+    <button type="button" id="openSettings" title="设置：填模型、密钥、沙盒、白名单">⚙ 设置</button>
+    <button id="send">发送</button>
+  </div>
+  <div class="hint" id="hint">默认只听 127.0.0.1；这版没有登录，别直接暴露到公网。
+    <label style="margin-left:8px"><input type="checkbox" id="speakOn" checked> 念出来</label>
+  </div>
+</form>
+
+<script>
+const log = document.getElementById('log');
+const meta = document.getElementById('meta');
+const form = document.getElementById('f');
+const input = document.getElementById('q');
+const send = document.getElementById('send');
+let session = 'web';
+try {
+  const saved = localStorage.getItem('jq-session');
+  if (saved) session = saved;
+  localStorage.setItem('jq-session', session);
+} catch (e) { }
+
+function add(who, text, cls) {
+  const d = document.createElement('div');
+  d.className = 'msg' + (cls ? ' ' + cls : '');
+  const w = document.createElement('div');
+  w.className = 'who';
+  w.textContent = who;
+  const b = document.createElement('div');
+  b.className = 'body';
+  b.textContent = text;
+  d.appendChild(w); d.appendChild(b);
+  log.appendChild(d);
+  d.scrollIntoView({ block: 'end' });
+  return d;
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch('/api/history?session=' + encodeURIComponent(session));
+    const j = await r.json();
+    if (!j.ok || !j.items || !j.items.length) return;
+    const first = log.querySelector('.greet');
+    if (first) first.remove();
+    for (const m of j.items) add(m.role === 'user' ? '你' : '她', m.content, m.role === 'user' ? 'me' : '');
+  } catch (e) { }
+}
+loadHistory();
+
+async function selfcheck() {
+  try {
+    const r = await fetch('/api/selfcheck');
+    const j = await r.json();
+    const ready = j.providers.filter(p => p.ready).map(p => p.name + '/' + p.model);
+    meta.textContent = '记忆 ' + j.memory.count + ' 条 · 事件 ' + j.memory.events
+      + ' 件 · 沙盒 ' + j.sandbox.effective
+      + ' · 模型 ' + (ready.length ? ready.join('、') : '没配');
+    if (!ready.length) {
+      add('她', '提醒一句：还没配模型。config.json 里填一家云端 key，或者本机起 Ollama（ollama pull qwen3:8b）。', 'err');
+    }
+  } catch (e) {
+    meta.textContent = '自检失败：' + e.message;
+  }
+}
+selfcheck();
+
+// ---------- 通话模式：一直听着 / 能打断 / 有垫音 ----------
+const micBtn = document.getElementById('mic');
+const speakOn = document.getElementById('speakOn');
+const hint = document.getElementById('hint');
+let recog = null;
+let inCall = false;
+let phase = 'idle';        // idle | listening | thinking | speaking
+let pendingText = '';
+let flushTimer = null;
+let currentReply = '';     // 正在念的回复，用来挡回声
+let fillerTimer = null;
+let fillerUtt = null;
+
+function pickVoice() {
+  if (!window.speechSynthesis) return null;
+  const vs = speechSynthesis.getVoices() || [];
+  return vs.find(v => /zh[-_]CN/i.test(v.lang)) || vs.find(v => /zh/i.test(v.lang)) || null;
+}
+
+function setStatus(t) { hint.textContent = t; }
+
+function norm(t) { return String(t || '').replace(/[\s，。！？、,.!?~…—\-]/g, ''); }
+
+// 是不是麦克风把她自己的声音听回来了
+function looksLikeEcho(heard) {
+  const h = norm(heard);
+  if (!h) return true;
+  if (h.length < 4) return true;
+  const r = norm(currentReply);
+  if (!r) return false;
+  if (r.includes(h)) return true;
+  // 简单相似度：连续 8 个字出现在回复里就当成回声
+  for (let i = 0; i + 8 <= h.length; i++) {
+    if (r.includes(h.slice(i, i + 8))) return true;
+  }
+  return false;
+}
+
+function utter(text, opts) {
+  const u = new SpeechSynthesisUtterance(String(text).replace(/[*#`]/g, '').slice(0, 400));
+  const v = pickVoice();
+  if (v) u.voice = v;
+  u.lang = 'zh-CN';
+  u.rate = (opts && opts.rate) || 1.05;
+  u.pitch = 1.0;
+  return u;
+}
+
+function speakReply(text, onDone) {
+  if (!window.speechSynthesis || !speakOn.checked) { if (onDone) setTimeout(onDone, 100); return; }
+  try {
+    speechSynthesis.cancel();
+    currentReply = String(text || '');
+    const u = utter(currentReply);
+    u.onend = () => { currentReply = ''; if (onDone) onDone(); };
+    u.onerror = () => { currentReply = ''; if (onDone) onDone(); };
+    speechSynthesis.speak(u);
+  } catch (e) { currentReply = ''; if (onDone) setTimeout(onDone, 100); }
+}
+
+// 垫音：等回复超过 600ms 还没来，先出个“嗯”，把空档藏住
+function startFiller() {
+  stopFiller();
+  fillerTimer = setTimeout(() => {
+    try {
+      if (!window.speechSynthesis || !speakOn.checked) return;
+      fillerUtt = utter('嗯，我想一下。', { rate: 1.1 });
+      speechSynthesis.speak(fillerUtt);
+    } catch (e) { }
+  }, 600);
+}
+function stopFiller() {
+  if (fillerTimer) { clearTimeout(fillerTimer); fillerTimer = null; }
+  try { if (fillerUtt) { speechSynthesis.cancel(); fillerUtt = null; } } catch (e) { }
+}
+
+function stopSpeaking() {
+  try { speechSynthesis.cancel(); } catch (e) { }
+  currentReply = '';
+  stopFiller();
+}
+
+function startListening() {
+  if (!inCall || !recog) return;
+  if (phase === 'thinking') return;
+  phase = 'listening';
+  pendingText = '';
+  try { recog.start(); } catch (e) { }
+}
+
+function startCall() {
+  if (!recog) return;
+  inCall = true;
+  micBtn.classList.add('on');
+  micBtn.textContent = '⏹';
+  setStatus('通话中：直接说话，说完我接；我说话时你可以随时打断。再点一下挂断。');
+  startListening();
+}
+
+function endCall() {
+  inCall = false;
+  phase = 'idle';
+  pendingText = '';
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  stopSpeaking();
+  micBtn.classList.remove('on');
+  micBtn.textContent = '🎙️';
+  try { recog.stop(); } catch (e) { }
+  setStatus('通话结束。点麦克风重新开始。');
+}
+
+function scheduleFlush() {
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    const t = pendingText.trim();
+    if (!t || phase !== 'listening') return;
+    pendingText = '';
+    input.value = t;
+    form.requestSubmit();
+  }, 1200);
+}
+
+function setupVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    micBtn.style.display = 'none';
+    setStatus('这个浏览器不支持语音识别，打字就行。默认只听 127.0.0.1，别暴露到公网。');
+    return;
+  }
+  recog = new SR();
+  recog.lang = 'zh-CN';
+  recog.interimResults = true;
+  recog.continuous = true;
+
+  recog.onresult = (ev) => {
+    let add = '';
+    for (let i = ev.resultIndex; i < ev.results.length; i++) add += ev.results[i][0].transcript;
+    if (!add.trim()) return;
+
+    // 她在说话时，听到什么都当成回声，除非明显不像
+    if (phase === 'speaking' && looksLikeEcho(add)) return;
+
+    // 打断：她正说着，你开口了 → 停她，听你说
+    if (phase === 'speaking' || phase === 'thinking') {
+      stopSpeaking();
+      phase = 'listening';
+      setStatus('通话中（你说话，我在听）');
+    }
+
+    pendingText += add;
+    input.value = pendingText.trim();
+    scheduleFlush();
+  };
+
+  recog.onerror = (e) => {
+    if (e.error === 'no-speech' || e.error === 'aborted') return;
+    if (e.error === 'not-allowed') { endCall(); setStatus('没给麦克风权限，允许一下再试，或者直接打字。'); return; }
+    setStatus('识别出问题：' + e.error + '（打字也行）');
+  };
+
+  recog.onend = () => {
+    if (inCall && phase !== 'thinking' && phase !== 'speaking') setTimeout(() => { if (inCall && phase === 'listening') try { recog.start(); } catch (e) { } }, 250);
+  };
+
+  micBtn.addEventListener('click', () => { if (inCall) endCall(); else startCall(); });
+}
+
+function callOnReply(reply, ok) {
+  if (!inCall) { if (ok && reply) speakReply(reply); return; }
+  stopFiller();
+  phase = 'speaking';
+  // 说话期间保持听（为了能打断），回声由 looksLikeEcho 挡掉
+  try { recog.start(); } catch (e) { }
+  speakReply(reply, () => {
+    if (!inCall) return;
+    phase = 'listening';
+    pendingText = '';
+    try { recog.start(); } catch (e) { }
+  });
+}
+setupVoice();
+
+document.getElementById('openSettings').onclick = () => location.href = '/console.html';
+
+form.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  add('你', text, 'me');
+  send.disabled = true;
+  if (inCall) { phase = 'thinking'; startFiller(); }
+  const pending = add('她', '…');
+  pending.querySelector('.body').textContent = '（在想）';
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: text, session })
+    });
+    const j = await r.json();
+    pending.querySelector('.body').textContent = j.ok ? j.reply : ('出错了：' + j.error);
+    if (!j.ok) pending.classList.add('err');
+    if (j.ok && j.reply) callOnReply(j.reply, true);
+    if (j.stats) {
+      const s = document.createElement('div');
+      s.className = 'stats';
+      s.textContent = '@' + (j.stats.provider || '?') + ' · ' + (j.stats.ms || 0) + 'ms · '
+        + (j.stats.total_tokens || 0) + ' tok · 步数 ' + (j.stats.steps || 0)
+        + (j.stats.tools && j.stats.tools.length ? ' · 工具 ' + j.stats.tools.join(',') : '')
+        + (j.stats.memory_used ? ' · 召回 ' + j.stats.memory_used : '');
+      pending.appendChild(s);
+    }
+    selfcheck();
+  } catch (e) {
+    pending.querySelector('.body').textContent = '网络/服务出错了：' + e.message;
+    if (inCall) { phase = 'listening'; startListening(); }
+  } finally {
+    send.disabled = false;
+    input.focus();
+  }
+});
+</script>
+</body>
+</html>

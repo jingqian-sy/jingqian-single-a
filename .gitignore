@@ -1,0 +1,36 @@
+# 你的密钥和本地数据不要进仓库
+config.json
+config.ci.json
+data/*
+!data/report.md
+!data/results.json
+!data/smoke.json
+!data/ledger-summary.json
+!data/ledger/
+!data/archive/
+evals/.run/
+.demo/
+
+# 3A 模板的数据（成绩报表保留，运行数据忽略）
+data-multi/*
+!data-multi/report.md
+!data-multi/results.json
+!data-multi/restart-verify.json
+!data-multi/archive/
+
+# 2A 模板的数据（同上）
+data-2a/*
+!data-2a/report.md
+!data-2a/results.json
+!data-2a/restart-verify.json
+!data-2a/adaptive-report.md
+!data-2a/adaptive-results.json
+!data-2a/archive/
+
+# 依赖（这版零依赖，留着是防以后加）
+node_modules/
+
+# 杂项
+*.log
+.DS_Store
+Thumbs.db

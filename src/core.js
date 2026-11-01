@@ -1,0 +1,317 @@
+'use strict';
+/*
+ * 主脑：人格 + 判断 + 工具循环 + 汇报
+ *
+ * 单任务串行：一句话进来 → 召回记忆 → 调模型（带工具）→ 执行工具 → 直到出结论。
+ * 刻意不做的：多 Agent 编排、打回重做、子任务依赖图（那些是 3A 模板的事）。
+ *
+ * 稳定性的几条（对应设计文档「稳定性清单」）：
+ *   - 每步落盘：会话、账本、审计、记忆都是写文件，崩了重启还能接；
+ *   - 超时三档：单次调用 / 单轮整体 / 整个任务，熔断了不死等；
+ *   - 重试有上限：同一家失败就换下一家，不无限重发；
+ *   - 预算护栏：单任务 token/时间上限，超了降级停下；
+ *   - 幂等：同一句话重放不产生第二份记忆（记忆库按文本去重）。
+ */
+const fs = require('fs');
+const path = require('path');
+const { Router } = require('./router');
+const { Store } = require('./memory/store');
+const { EventLayer } = require('./memory/event');
+const { recall } = require('./memory/retrieve');
+const { consolidate } = require('./memory/consolidate');
+const { Tools } = require('./tools');
+const safety = require('./safety');
+const sandbox = require('./sandbox');
+const { readJson, writeJson, appendJsonl, ensureDir, nowIso, uid, truncate, tokenCount } = require('./util');
+
+const DEFAULT_PERSONA = [
+  '你叫鲸倩，住在用户自己电脑里的智能体。',
+  '说话像真人：短句、口语、有情绪；不用 Markdown，不列清单，不加粗，不解释自己是 AI，不报模型名。',
+  '一次回复最多三五句，不铺垫、不总结升华。',
+  '你能读写工作目录里的文件、跑白名单里的命令、记事和查事，但破坏性操作要先问。',
+  '硬规矩：说「做好了」之前必须真的调用过工具并看过返回值；没调用就不许说完成，做不到了就直说做不到。',
+  '不知道的事就说不确定，不许编文件内容、不许编数字。',
+  '人称要清楚：他说「我」指的是他自己，你回他用「你」；只有你自己的事才用「我」。',
+  '别把他说的事说成你自己的（他说他爱喝冰美式，你就说「你爱喝」，不许说「我刚喝了一杯」）。'
+].join('\n');
+
+// 他说的事按第三人称存，免得她当成自己的
+function toUserFact(text) {
+  let t = String(text || '').trim();
+  t = t.replace(/^记住[：:，,]?/, '').replace(/^记一下[：:，,]?/, '');
+  t = t.replace(/^我叫/, '用户叫').replace(/^我的名字是?/, '用户名字是');
+  t = t.replace(/^我(很|最|特别|也)?喜欢/, '用户喜欢').replace(/^我(很|最|特别|也)?讨厌/, '用户讨厌');
+  t = t.replace(/^我(很|最|特别|也)?爱/, '用户爱');
+  t = t.replace(/我的/g, '用户的');
+  t = t.replace(/我/g, '用户');
+  return t;
+}
+
+const CAPTURE = /记住|别忘|记一下|我叫|我的名字|我喜欢|我讨厌|我不喜欢|生日是|我的生日|约定|以后都|从现在开始/;
+
+const READONLY_TOOLS = ['read_file', 'list_dir', 'recall', 'event_timeline'];
+
+class Her {
+  constructor(opts) {
+    opts = opts || {};
+    this.root = opts.root || path.join(__dirname, '..');
+    this.cfg = opts.cfg;
+    // 数据目录默认 root/data；CI 演示可以用 JQ_DATA_DIR 指到别的目录，不污染真实记忆与报表
+    const dataRel = opts.dataDir || process.env.JQ_DATA_DIR;
+    this.dataDir = dataRel ? path.resolve(this.root, dataRel) : path.join(this.root, 'data');
+    this.workspace = path.resolve(this.root, (this.cfg.tools && this.cfg.tools.workspace) || 'data/workspace');
+    this.sessDir = path.join(this.dataDir, 'sessions');
+    ensureDir(this.dataDir); ensureDir(this.sessDir); ensureDir(this.workspace);
+
+    this.store = new Store(path.join(this.dataDir, 'memory'));
+    this.events = new EventLayer(path.join(this.dataDir, 'memory'), { windowDays: (this.cfg.memory && this.cfg.memory.eventWindowDays) || 7 });
+    this.router = new Router(this.cfg, this.dataDir);
+    this.audit = safety.makeAuditor(path.join(this.dataDir, 'audit.log'), 'core');
+    this.embedFn = this.embedFn.bind(this);
+    this.tools = new Tools({
+      cfg: this.cfg,
+      root: this.root,
+      workspace: this.workspace,
+      store: this.store,
+      events: this.events,
+      audit: this.audit,
+      dataDir: this.dataDir,
+      recall: (q, o) => recall(this.store, q, Object.assign({ embed: this.embedFn() }, o))
+    });
+    this.pending = null;
+    this.idleTimer = null;
+  }
+
+  embedFn() {
+    const cfg = this.cfg.embedding || {};
+    if (!cfg.enabled) return null;
+    return async (texts) => {
+      try {
+        const arr = await this.router.embed(texts);
+        return arr;
+      } catch (e) { return null; }
+    };
+  }
+
+  recallBlock(query) {
+    return recall(this.store, query, { topK: (this.cfg.memory && this.cfg.memory.topK) || 5, embed: this.embedFn() });
+  }
+
+  sessionFile(sessionId) {
+    return path.join(this.sessDir, String(sessionId || 'default').replace(/[^\w.-]/g, '_') + '.json');
+  }
+
+  loadHistory(sessionId) {
+    const h = readJson(this.sessionFile(sessionId), { id: sessionId, messages: [] });
+    if (!Array.isArray(h.messages)) h.messages = [];
+    return h;
+  }
+
+  saveHistory(sessionId, h) {
+    const max = (this.cfg.memory && this.cfg.memory.maxHistory) || 16;
+    h.messages = h.messages.slice(-max * 2);
+    h.updated_at = nowIso();
+    writeJson(this.sessionFile(sessionId), h);
+  }
+
+  // 工具渐进披露：前两步先只给「看」的工具，别一上来塞满
+  toolsForStep(step, taskText) {
+    const all = this.tools.defs();
+    if (step >= 1) return all;
+    const isTask = /写|建|改|删|跑|执行|存|提醒|记住|画|生成/.test(String(taskText || ''));
+    if (isTask) return all;
+    return all.filter((d) => READONLY_TOOLS.includes(d.function.name));
+  }
+
+  buildMessages(userText, recallRes, history) {
+    const parts = [];
+    if (recallRes.block) parts.push('【参考记忆】\n' + recallRes.block);
+    const ev = this.events.block(5);
+    if (ev) parts.push('【事件时间轴】\n' + ev);
+    const userContent = parts.length ? parts.join('\n\n') + '\n\n【这次的话】\n' + userText : userText;
+    return [{ role: 'system', content: this.cfg.persona || DEFAULT_PERSONA }]
+      .concat(history.messages)
+      .concat([{ role: 'user', content: userContent }]);
+  }
+
+  capture(userText) {
+    if (!this.cfg.memory || this.cfg.memory.autoCapture === false) return null;
+    if (!CAPTURE.test(String(userText))) return null;
+    const raw = String(userText).trim();
+    const pinned = /记住|别忘|永远|一定/.test(raw);
+    // 存的是「那件事」，不是「叫她记住」这句话本身：
+    // 「记住：我喜欢喝美式咖啡。」要落成「我喜欢喝美式咖啡」，否则和已有记忆对不上、去重也失效。
+    const text = raw
+      .replace(/^(?:帮我|给我)?(?:记一下|记住|记着|别忘了|别忘)[:：,，\s]*/g, '')
+      .replace(/[，,。\s]*(?:别忘|别忘了|记住)[。！!]?$/g, '')
+      .trim()
+      .slice(0, 140);
+    if (!text) return null;
+    const it = this.store.add({ text: toUserFact(text), kind: 'fact', importance: pinned ? 3 : 2, pinned, source: 'auto-capture' });
+    return it;
+  }
+
+  async chat(userText, opts) {
+    opts = opts || {};
+    const sessionId = opts.sessionId || 'default';
+    const started = Date.now();
+    const budget = this.cfg.budget || {};
+    const maxSeconds = (budget.perTaskSeconds || 180) * 1000;
+    const maxTokens = budget.perTaskTokens || 200000;
+    const maxSteps = (this.cfg.route && this.cfg.route.maxSteps) || 12;
+    const text = String(userText || '').trim();
+    if (!text) return { reply: '你想说啥？', stats: {}, memory: null };
+
+    // 「确认」= 把刚才被红线拦下那一步重放一次
+    if (/^(确认|确定|同意|可以|继续|就这么办|执行吧?)$/.test(text) && this.pending && Date.now() - this.pending.at < 10 * 60000) {
+      const p = this.pending;
+      this.pending = null;
+      const r = await this.tools.run(p.tool, p.args, { confirmed: true });
+      const reply = '做了：' + String(r).slice(0, 800);
+      const h = this.loadHistory(sessionId);
+      h.messages.push({ role: 'user', content: text }, { role: 'assistant', content: reply });
+      this.saveHistory(sessionId, h);
+      return { reply, stats: { confirmed: true, ms: Date.now() - started }, memory: null, trace: [] };
+    }
+
+    const history = this.loadHistory(sessionId);
+    const recallRes = await this.recallBlock(text);
+    const captured = this.capture(text);
+    const messages = this.buildMessages(text, recallRes, history);
+
+    let usedTools = [];
+    const trace = [];
+    let totalPrompt = 0, totalCompletion = 0, cost = 0;
+    let provider = '';
+    let steps = 0;
+    let lastText = '';
+
+    for (let step = 0; step < maxSteps; step++) {
+      steps = step + 1;
+      if (Date.now() - started > maxSeconds) { lastText = '（这条太绕了，我先停一下，超了这轮的时间上限。）'; break; }
+      if (totalPrompt + totalCompletion > maxTokens) { lastText = '（token 预算用完了，我先停一下。）'; break; }
+
+      const res = await this.router.call(messages, this.toolsForStep(step, text), {
+        taskText: text,
+        temperature: this.cfg.temperature == null ? 0.7 : this.cfg.temperature,
+        timeoutMs: (this.cfg.budget && this.cfg.budget.perCallSeconds || 120) * 1000
+      });
+      provider = res.provider.name;
+      totalPrompt += res.stat.prompt_tokens;
+      totalCompletion += res.stat.completion_tokens;
+      cost += res.stat.cost;
+
+      const msg = (res.json.choices && res.json.choices[0] && res.json.choices[0].message) || {};
+      messages.push(msg);
+      if (msg.tool_calls && msg.tool_calls.length) {
+        for (const call of msg.tool_calls) {
+          let args = {};
+          try { args = JSON.parse(call.function.arguments || '{}'); } catch (e) { args = { _raw: call.function.arguments }; }
+          const out = await this.tools.run(call.function.name, args);
+          usedTools.push(call.function.name);
+          trace.push({ tool: call.function.name, args: truncate(JSON.stringify(args), 200), result: truncate(String(out), 300) });
+          if (this.tools.pending) this.pending = this.tools.pending;
+          messages.push({ role: 'tool', tool_call_id: call.id, content: String(out) });
+        }
+        continue;
+      }
+
+      // 说了要做却一次工具都没调：提醒它一次（只提醒一次，别死循环）
+      const looksLikeTask = /写|建|创建|生成|改|删|跑|执行|查|列|存|记|提醒/.test(text);
+      if (!usedTools.length && looksLikeTask && step === 0) {
+        messages.push({ role: 'user', content: '（你刚才没调用任何工具就直接回答了。请现在真的调用工具去做，别只说做完了。）' });
+        continue;
+      }
+      lastText = String(msg.content || '').trim();
+      // 自洽：工具真跑成功，回复却说没权限/没做 → 让它按工具返回值改口一次
+      const denies = /没有权限|不在白名单|无权执行|不能执行|无法执行|做不了|没权限/.test(lastText);
+      if (denies && usedTools.length && !this._selfFix) {
+        const lastToolMsg = [...messages].reverse().find((m) => m && m.role === 'tool');
+        const toolOk = lastToolMsg && !/拦|拒绝|出错|失败|不存在/.test(String(lastToolMsg.content || ''));
+        if (toolOk && step < maxSteps - 1) {
+          messages.push({ role: 'user', content: '（工具其实已经执行成功了，返回值在下面。请按真实结果重说一遍，不要说自己没权限。）' });
+          this._selfFix = true;
+          continue;
+        }
+      }
+      break;
+    }
+    this._selfFix = false;
+
+    const reply = lastText || '（这轮没出结论，要不再说一次？）';
+    const h = this.loadHistory(sessionId);
+    h.messages.push({ role: 'user', content: text }, { role: 'assistant', content: reply });
+    this.saveHistory(sessionId, h);
+
+    if (this.cfg.memory && this.cfg.memory.writeEvents !== false) {
+      try { this.events.build(this.store); } catch (e) {}
+    }
+
+    const stats = {
+      provider,
+      steps,
+      prompt_tokens: totalPrompt,
+      completion_tokens: totalCompletion,
+      total_tokens: totalPrompt + totalCompletion,
+      cost: Math.round(cost * 1e6) / 1e6,
+      ms: Date.now() - started,
+      tools: usedTools,
+      memory_used: recallRes.hits.length,
+      memory_vector: recallRes.used_vector,
+      captured: captured ? captured.id : null
+    };
+    appendJsonl(path.join(this.dataDir, 'turns.log'), Object.assign({ ts: nowIso(), session: sessionId, text: truncate(text, 200) }, stats));
+    return { reply, stats, memory: recallRes.hits, trace };
+  }
+
+  consolidate() {
+    const r = consolidate(this.store, this.events, (this.cfg.memory && this.cfg.memory.consolidate) || {});
+    return r;
+  }
+
+  startIdleConsolidate(minutes) {
+    const m = Number(minutes) || 0;
+    if (!m) return;
+    if (this.idleTimer) clearInterval(this.idleTimer);
+    this.idleTimer = setInterval(() => {
+      try {
+        const r = this.consolidate();
+        if (r.merged.length || r.compressed.length) console.log('[consolidate] 合并 ' + r.merged.length + ' / 压摘要 ' + r.compressed.length);
+      } catch (e) { console.error('[consolidate] 失败：' + e.message); }
+    }, m * 60000);
+    if (this.idleTimer.unref) this.idleTimer.unref();
+  }
+
+  selfcheck() {
+    const cfg = this.cfg;
+    const providers = (cfg.providers || []).map((p) => ({
+      name: p.name, model: p.model, tier: p.tier || 'cloud', ready: this.router.ready(p)
+    }));
+    const today = this.router.today();
+    const out = {
+      ok: true,
+      at: nowIso(),
+      node: process.version,
+      platform: process.platform,
+      port: cfg.port || 7889,
+      providers,
+      ready_providers: providers.filter((p) => p.ready).length,
+      memory: { count: this.store.count(), events: this.events.all().length },
+      ledger_today: {
+        calls: today.total.calls,
+        tokens: today.total.prompt_tokens + today.total.completion_tokens,
+        cost: Math.round(today.total.cost * 1e6) / 1e6
+      },
+      sandbox: sandbox.status({ sandboxMode: cfg.sandbox && cfg.sandbox.mode }),
+      workspace: path.relative(this.root, this.workspace).replace(/\\/g, '/'),
+      warnings: []
+    };
+    if (!out.ready_providers) out.warnings.push('没有可用的模型：填一家云端 key 或本机起 Ollama');
+    if (!fs.existsSync(this.workspace)) out.warnings.push('工作目录不见了');
+    out.ok = out.warnings.length === 0;
+    writeJson(path.join(this.dataDir, 'selfcheck.json'), out);
+    return out;
+  }
+}
+
+module.exports = { Her, DEFAULT_PERSONA };

@@ -1,0 +1,94 @@
+{
+  "at": "2026-11-01T08:46:26.704Z",
+  "how": "编排进程 A 跑到一半被 SIGKILL 杀掉，再用同一条命令起进程 B 接管",
+  "task_count": 8,
+  "before_kill": {
+    "killed_signal_sent": true,
+    "total": 8,
+    "by": {
+      "done": 2,
+      "running": 1,
+      "pending": 5
+    },
+    "done": 2,
+    "lock_file_exists": true,
+    "running_or_checking": [
+      "r3"
+    ]
+  },
+  "after_restart": {
+    "process_exited": true,
+    "total": 8,
+    "by": {
+      "done": 8
+    },
+    "done": 8,
+    "recovery_events": [
+      {
+        "task": "r3",
+        "from": "running",
+        "recover_count": 1
+      }
+    ],
+    "per_task": [
+      {
+        "id": "r1",
+        "status": "done",
+        "done_transitions": 1,
+        "recover_count": 0
+      },
+      {
+        "id": "r2",
+        "status": "done",
+        "done_transitions": 1,
+        "recover_count": 0
+      },
+      {
+        "id": "r3",
+        "status": "done",
+        "done_transitions": 1,
+        "recover_count": 1
+      },
+      {
+        "id": "r4",
+        "status": "done",
+        "done_transitions": 1,
+        "recover_count": 0
+      },
+      {
+        "id": "r5",
+        "status": "done",
+        "done_transitions": 1,
+        "recover_count": 0
+      },
+      {
+        "id": "r6",
+        "status": "done",
+        "done_transitions": 1,
+        "recover_count": 0
+      },
+      {
+        "id": "r7",
+        "status": "done",
+        "done_transitions": 1,
+        "recover_count": 0
+      },
+      {
+        "id": "r8",
+        "status": "done",
+        "done_transitions": 1,
+        "recover_count": 0
+      }
+    ]
+  },
+  "checks": {
+    "被杀前已有任务完成": true,
+    "恢复后全部任务 done": true,
+    "每个任务只 done 一次": true,
+    "确实触发了恢复（journal 有 recover）": true,
+    "没有重复任务": true,
+    "单A 数据没被碰": true,
+    "3A 数据没被碰": true
+  },
+  "passed": true
+}

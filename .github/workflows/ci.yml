@@ -1,0 +1,51 @@
+name: CI
+
+# 不联网、不需要任何密钥：mock provider 在本地起一个假模型，
+# 跑判定器单测 + 工具/红线单测 + 服务冒烟 + 6 题评测子集。
+# 哪一步挂了，日志里会直接写出是哪一步、哪条规则没过。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22]
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+
+      - name: 装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 环境信息
+        run: |
+          node --version
+          npm --version
+          uname -a
+
+      - name: 一条命令跑完（语法 / 单测 / mock / 冒烟 / 评测子集）
+        run: node evals/ci.js
+
+      - name: 失败时留现场
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-node${{ matrix.node }}
+          path: |
+            data/ci-run/
+            evals/.run/
+          if-no-files-found: ignore
+          retention-days: 7

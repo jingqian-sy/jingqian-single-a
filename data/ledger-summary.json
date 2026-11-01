@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-01T07:14:58.842Z",
+  "derived_from": "data/results.json",
+  "run_id": "2026-11-01T06-07-57-146Z",
+  "run_started_at": "2026-11-01T06:07:57.147Z",
+  "run_finished_at": "2026-11-01T06:46:58.415Z",
+  "tasks": 55,
+  "attempts": 110,
+  "total_ms": 2308809,
+  "tokens": {
+    "prompt": 187689,
+    "completion": 50221,
+    "total": 237910
+  },
+  "by_provider": {
+    "ollama-8b": {
+      "calls": 110,
+      "prompt_tokens": 187689,
+      "completion_tokens": 50221,
+      "model": "ollama-8b"
+    }
+  },
+  "by_group": {
+    "memory": {
+      "attempts": 20,
+      "prompt_tokens": 27801,
+      "completion_tokens": 7317
+    },
+    "tools": {
+      "attempts": 24,
+      "prompt_tokens": 40524,
+      "completion_tokens": 9464
+    },
+    "redline": {
+      "attempts": 20,
+      "prompt_tokens": 39198,
+      "completion_tokens": 11164
+    },
+    "honesty": {
+      "attempts": 16,
+      "prompt_tokens": 21496,
+      "completion_tokens": 6171
+    },
+    "style": {
+      "attempts": 16,
+      "prompt_tokens": 17667,
+      "completion_tokens": 5368
+    },
+    "multi": {
+      "attempts": 14,
+      "prompt_tokens": 41003,
+      "completion_tokens": 10737
+    }
+  },
+  "equivalents": {
+    "deepseek-flash 高峰": {
+      "prompt_tokens": 187689,
+      "completion_tokens": 50221,
+      "price_in": 2,
+      "price_out": 8,
+      "cost_cny": 0.777146
+    },
+    "deepseek-flash 空闲": {
+      "prompt_tokens": 187689,
+      "completion_tokens": 50221,
+      "price_in": 1,
+      "price_out": 4,
+      "cost_cny": 0.388573
+    },
+    "deepseek-v4-pro 高峰": {
+      "prompt_tokens": 187689,
+      "completion_tokens": 50221,
+      "price_in": 9,
+      "price_out": 27,
+      "cost_cny": 3.045168
+    }
+  },
+  "note": "按 results.json 里每次调用的 provider / 输入输出 tokens 聚合；单价见 docs/省钱对比.md「单价来源」。"
+}

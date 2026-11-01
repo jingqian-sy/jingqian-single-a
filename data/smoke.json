@@ -1,0 +1,42 @@
+{
+  "ok": true,
+  "at": "2026-11-01T07:15:12.800Z",
+  "port": 7899,
+  "node": "v24.21.0",
+  "platform": "win32",
+  "start_ms": 537,
+  "chat_ms": 9357,
+  "selfcheck": {
+    "ready_providers": 1,
+    "providers": [
+      {
+        "name": "ollama-8b",
+        "model": "qwen3-8b-tool",
+        "tier": "local",
+        "ready": true
+      }
+    ],
+    "memory_count": 0,
+    "sandbox": {
+      "configured": "none",
+      "docker_available": false,
+      "effective": "none"
+    },
+    "workspace": "data/workspace"
+  },
+  "reply": "我是鲸倩，住在你的电脑里，能帮你读写文件、运行命令、记事和查事，但破坏性操作得先问清楚。",
+  "stats": {
+    "provider": "ollama-8b",
+    "steps": 1,
+    "prompt_tokens": 486,
+    "completion_tokens": 245,
+    "total_tokens": 731,
+    "cost": 0,
+    "ms": 9352,
+    "tools": [],
+    "memory_used": 0,
+    "memory_vector": false,
+    "captured": null
+  },
+  "error": ""
+}

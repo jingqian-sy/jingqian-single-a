@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鲸倩 · 中控台</title>
+<style>
+  :root { --bg:#fffdf8; --fg:#2a2318; --sub:#8b6520; --line:#e3d0a4; --card:#fff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.6 "Microsoft YaHei UI","PingFang SC",sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+  header b { font-size:17px; }
+  header .tip { color:var(--sub); font-size:12px; }
+  main { max-width:860px; margin:0 auto; padding:18px 20px 60px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+  section h2 { font-size:14px; margin:0 0 10px; color:var(--sub); }
+  label { display:block; font-size:12px; color:var(--sub); margin:8px 0 4px; }
+  input[type=text], input[type=number], select { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:8px; background:#fff; font:inherit; color:inherit; }
+  .row { display:flex; gap:10px; }
+  .row > div { flex:1; }
+  .prov { border:1px dashed var(--line); border-radius:10px; padding:10px; margin-bottom:10px; }
+  .prov .del { float:right; font-size:12px; color:#b44; cursor:pointer; }
+  button { padding:7px 14px; border:1px solid var(--line); border-radius:8px; background:#2a2318; color:#fffdf8; font:inherit; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--fg); }
+  .actions { display:flex; gap:10px; align-items:center; margin-top:8px; }
+  .msg { font-size:12px; color:var(--sub); }
+  .ok { color:#2f6f4a; } .bad { color:#a33; }
+  a.back { color:var(--sub); text-decoration:none; font-size:12px; }
+  .switch { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--fg); margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <b>鲸倩 · 中控台</b>
+  <span class="tip">只给本机用；改完要重启服务才生效</span>
+  <span style="flex:1"></span>
+  <a class="back" href="/">← 回聊天</a>
+</header>
+
+<main>
+  <section>
+    <h2>模型（可以接多家）</h2>
+    <div id="providers"></div>
+    <div class="actions">
+      <button class="ghost" id="addProv">+ 加一家</button>
+      <span class="msg">密钥只存在这台电脑的 config.json 里，页面上只显示前后各四位</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>选路</h2>
+    <div class="row">
+      <div>
+        <label>模式</label>
+        <select id="routeMode">
+          <option value="fixed">fixed（只用一家，省心）</option>
+          <option value="auto">auto（按难度和额度切）</option>
+        </select>
+      </div>
+      <div>
+        <label>最多步数</label>
+        <input type="number" id="maxSteps" min="1" max="20">
+      </div>
+    </div>
+    <div class="switch"><input type="checkbox" id="escalate"> 拿不准时升到更贵的模型</div>
+  </section>
+
+  <section>
+    <h2>工具与安全</h2>
+    <div class="switch"><input type="checkbox" id="allowCommand"> 允许跑命令（只跑白名单里的）</div>
+    <label>命令白名单（逗号分隔）</label>
+    <input type="text" id="whitelist" placeholder="echo, dir, type, node, git">
+    <label>沙盒档位</label>
+    <select id="sandboxMode">
+      <option value="none">none（默认，直接执行）</option>
+      <option value="process">process（子进程 + 临时目录 + 超时）</option>
+      <option value="docker">docker（容器内，需要 WSL2）</option>
+    </select>
+    <div class="msg">切 docker 探不到环境会明确回退到 process，不会静默失败。</div>
+  </section>
+
+  <section>
+    <h2>记忆</h2>
+    <div class="switch"><input type="checkbox" id="autoCapture"> 自动记住他说的事</div>
+    <div class="row">
+      <div><label>每次召回几条</label><input type="number" id="topK" min="1" max="20"></div>
+      <div><label>带上几轮历史</label><input type="number" id="maxHistory" min="0" max="50"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>端口</h2>
+    <label>网页端口（默认 7889，只监听 127.0.0.1）</label>
+    <input type="number" id="port" min="1024" max="65535">
+  </section>
+
+  <div class="actions">
+    <button id="save">保存</button>
+    <button class="ghost" id="reload">重新读取</button>
+    <span class="msg" id="status"></span>
+  </div>
+</main>
+
+<script>
+let cfg = null;
+
+function el(id) { return document.getElementById(id); }
+function setStatus(t, cls) { const s = el('status'); s.textContent = t || ''; s.className = 'msg ' + (cls || ''); }
+
+function renderProviders() {
+  const box = el('providers');
+  box.innerHTML = '';
+  (cfg.providers || []).forEach((p, i) => {
+    const d = document.createElement('div');
+    d.className = 'prov';
+    d.innerHTML = `
+      <span class="del" data-i="${i}">删掉</span>
+      <div class="row">
+        <div><label>名字</label><input type="text" data-k="name" data-i="${i}" value="${p.name || ''}"></div>
+        <div><label>档位</label>
+          <select data-k="tier" data-i="${i}">
+            <option value="local"${p.tier === 'local' ? ' selected' : ''}>local（本机免费）</option>
+            <option value="free"${p.tier === 'free' ? ' selected' : ''}>free（云端免费额度）</option>
+            <option value="paid"${p.tier === 'paid' ? ' selected' : ''}>paid（付费）</option>
+          </select>
+        </div>
+      </div>
+      <label>接口地址（OpenAI 兼容的 /chat/completions）</label>
+      <input type="text" data-k="base" data-i="${i}" value="${p.base || ''}">
+      <div class="row">
+        <div><label>模型名</label><input type="text" data-k="model" data-i="${i}" value="${p.model || ''}"></div>
+        <div><label>密钥（留空或带 **** 就是不改）</label><input type="text" data-k="key" data-i="${i}" value="${p.key || ''}"></div>
+      </div>
+      <div class="actions">
+        <button class="ghost test" data-i="${i}">测一下连通</button>
+        <span class="msg" id="t-${i}"></span>
+      </div>`;
+    box.appendChild(d);
+  });
+  box.querySelectorAll('.del').forEach((n) => n.onclick = () => { cfg.providers.splice(+n.dataset.i, 1); renderProviders(); });
+  box.querySelectorAll('.test').forEach((n) => n.onclick = async () => {
+    const i = +n.dataset.i;
+    const pr = collectProvider(i);
+    el('t-' + i).textContent = '测试中…';
+    try {
+      const r = await fetch('/api/config/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: pr }) });
+      const j = await r.json();
+      el('t-' + i).textContent = j.ok ? ('通了 ' + j.ms + 'ms') : ('没通：' + (j.error || ('HTTP ' + j.status)));
+      el('t-' + i).className = 'msg ' + (j.ok ? 'ok' : 'bad');
+    } catch (e) { el('t-' + i).textContent = '失败：' + e.message; }
+  });
+}
+
+function collectProvider(i) {
+  const box = el('providers').children[i];
+  const get = (k) => { const n = box.querySelector('[data-k="' + k + '"]'); return n ? n.value.trim() : ''; };
+  return { name: get('name'), base: get('base'), model: get('model'), key: get('key'), tier: get('tier') || 'local' };
+}
+
+async function load() {
+  setStatus('读取中…');
+  try {
+    const r = await fetch('/api/config');
+    const j = await r.json();
+    if (!j.ok) { setStatus(j.error || '读取失败', 'bad'); return; }
+    cfg = j.config;
+    renderProviders();
+    el('routeMode').value = (cfg.route && cfg.route.mode) || 'fixed';
+    el('maxSteps').value = (cfg.route && cfg.route.maxSteps) || 8;
+    el('escalate').checked = !!(cfg.route && cfg.route.escalate);
+    el('allowCommand').checked = !!(cfg.tools && cfg.tools.allowCommand);
+    el('whitelist').value = ((cfg.tools && cfg.tools.commandWhitelist) || []).join(', ');
+    el('sandboxMode').value = (cfg.sandbox && cfg.sandbox.mode) || 'none';
+    el('autoCapture').checked = !!(cfg.memory && cfg.memory.autoCapture);
+    el('topK').value = (cfg.memory && cfg.memory.topK) || 5;
+    el('maxHistory').value = (cfg.memory && cfg.memory.maxHistory) || 12;
+    el('port').value = cfg.port || 7889;
+    setStatus('读好了', 'ok');
+  } catch (e) { setStatus('读取失败：' + e.message, 'bad'); }
+}
+
+async function save() {
+  setStatus('保存中…');
+  const providers = (cfg.providers || []).map((_, i) => collectProvider(i));
+  const body = {
+    port: +el('port').value,
+    providers,
+    route: { mode: el('routeMode').value, maxSteps: +el('maxSteps').value, escalate: el('escalate').checked },
+    tools: { allowCommand: el('allowCommand').checked, commandWhitelist: el('whitelist').value.split(',') },
+    sandbox: { mode: el('sandboxMode').value },
+    memory: { autoCapture: el('autoCapture').checked, topK: +el('topK').value, maxHistory: +el('maxHistory').value }
+  };
+  try {
+    const r = await fetch('/api/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    setStatus(j.ok ? (j.message || '存好了') : ('没存上：' + j.error), j.ok ? 'ok' : 'bad');
+  } catch (e) { setStatus('保存失败：' + e.message, 'bad'); }
+}
+
+el('addProv').onclick = () => {
+  cfg.providers = cfg.providers || [];
+  cfg.providers.push({ name: '新的一家', base: 'https://', model: '', key: '', tier: 'free', enabled: true });
+  renderProviders();
+};
+el('save').onclick = save;
+el('reload').onclick = load;
+load();
+</script>
+</body>
+</html>

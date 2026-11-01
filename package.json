@@ -1,0 +1,53 @@
+{
+  "name": "jingqian-single-a",
+  "version": "1.4.0",
+  "description": "鲸倩 · 单A 开源雏版：会记事、会算账、会动手，但手上有一条红线",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "demo": "node demo.js",
+    "selfcheck": "node evals/selfcheck.js",
+    "smoke": "node evals/smoke.js",
+    "evals": "node evals/run.js --run",
+    "evals:report": "node evals/run.js --report",
+    "rejudge": "node evals/rejudge.js",
+    "ledger": "node evals/ledger-summary.js",
+    "ci": "node evals/ci.js",
+    "test": "node evals/test-judge.js && node evals/test-tools.js",
+    "consolidate": "node evals/consolidate.js",
+    "3a": "node src-multi/cli.js",
+    "3a:restart": "node evals-multi/restart-test.js",
+    "3a:evals": "node evals-multi/run.js --run",
+    "3a:report": "node evals-multi/run.js --report",
+    "2a": "node src-2a/cli.js",
+    "2a:restart": "node evals-2a/restart-test.js",
+    "2a:evals": "node evals-2a/run.js --run",
+    "2a:report": "node evals-2a/run.js --report",
+    "auto": "node src-2a/cli.js --mode auto",
+    "adaptive:evals": "node evals-adaptive/run.js --run",
+    "adaptive:report": "node evals-adaptive/run.js --report"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/jingqian-single-a.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/jingqian-single-a/issues"
+  },
+  "homepage": "https://github.com/your-org/jingqian-single-a#readme",
+  "keywords": [
+    "agent",
+    "llm",
+    "memory",
+    "local-first",
+    "openai-compatible",
+    "chinese"
+  ],
+  "dependencies": {},
+  "license": "MIT",
+  "private": true
+}

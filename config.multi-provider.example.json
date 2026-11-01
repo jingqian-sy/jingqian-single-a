@@ -1,0 +1,101 @@
+{
+  "_说明": [
+    "多提供方样例：三家云端 + 一台本地。复制成 config.json 再填 key（别把这份改成真 key 提交）。",
+    "单价单位：元 / 百万 tokens，用来估算账本，不是账单；价格会变，以各家控制台为准。",
+    "quota 字段（monthly_free_tokens / used_tokens / max_concurrency）目前只是**占位**：",
+    "当前版本的路由只按 tier 和单价排序，还没有读额度字段；写在这里是为了以后接配额账本时有统一位置，",
+    "别以为现在它会自动挑「还剩免费额度的那家」。"
+  ],
+  "port": 7889,
+  "host": "127.0.0.1",
+
+  "providers": [
+    {
+      "name": "ollama-8b",
+      "tier": "local",
+      "base": "http://127.0.0.1:11434/v1/chat/completions",
+      "model": "qwen3:8b",
+      "key": "local",
+      "price_in": 0,
+      "price_out": 0,
+      "quota": { "monthly_free_tokens": null, "used_tokens": 0, "max_concurrency": 1, "note": "本地，只有电费" },
+      "note": "本机 Ollama，先 ollama pull qwen3:8b；不用 key"
+    },
+    {
+      "name": "zhipu-flash",
+      "tier": "cloud",
+      "base": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "model": "glm-4-flash",
+      "key": "",
+      "env": "ZHIPU_API_KEY",
+      "price_in": 0,
+      "price_out": 0,
+      "quota": { "monthly_free_tokens": 1000000, "used_tokens": 0, "max_concurrency": 2, "note": "免费档，价格按 0 记；额度与限速以官网为准" },
+      "note": "key 去 open.bigmodel.cn 申请；免费额度优先用这家"
+    },
+    {
+      "name": "volc-doubao-lite",
+      "tier": "cloud",
+      "base": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+      "model": "doubao-lite-32k",
+      "key": "",
+      "env": "ARK_API_KEY",
+      "price_in": 0.3,
+      "price_out": 0.6,
+      "quota": { "monthly_free_tokens": 500000, "used_tokens": 0, "max_concurrency": 5, "note": "火山方舟；单价与免费额度以控制台为准" },
+      "note": "key 去 console.volcengine.com/ark 申请；单价是估价参数"
+    },
+    {
+      "name": "deepseek",
+      "tier": "cloud",
+      "base": "https://api.deepseek.com/chat/completions",
+      "model": "deepseek-chat",
+      "key": "",
+      "env": "DEEPSEEK_API_KEY",
+      "price_in": 2.0,
+      "price_out": 8.0,
+      "quota": { "monthly_free_tokens": 0, "used_tokens": 0, "max_concurrency": 20, "note": "付费兜底；单价按 2026-11-01 官方定价页高峰档填" },
+      "note": "key 去 platform.deepseek.com 申请；单价见 docs/省钱对比.md"
+    }
+  ],
+
+  "route": {
+    "mode": "cheap-first",
+    "order": ["ollama-8b", "zhipu-flash", "volc-doubao-lite", "deepseek"],
+    "escalate": true,
+    "maxSteps": 12
+  },
+
+  "memory": {
+    "topK": 5,
+    "maxHistory": 16,
+    "autoCapture": true,
+    "writeEvents": true,
+    "eventWindowDays": 7,
+    "idleConsolidateMinutes": 60,
+    "consolidate": { "dupThreshold": 0.85, "oldEventDays": 60, "minGroup": 4 }
+  },
+
+  "embedding": {
+    "enabled": false,
+    "base": "https://open.bigmodel.cn/api/paas/v4/embeddings",
+    "model": "embedding-3",
+    "key": "",
+    "note": "开了才走向量召回，不填就纯关键词"
+  },
+
+  "tools": {
+    "workspace": "data/workspace",
+    "allowCommand": true,
+    "commandWhitelist": ["echo", "dir", "type", "node", "python", "git", "where", "ls", "cat", "findstr"],
+    "commandTimeoutMs": 30000,
+    "maxOutput": 12000,
+    "names": null
+  },
+
+  "sandbox": { "mode": "none", "image": "node:22-alpine" },
+
+  "budget": { "perCallSeconds": 120, "perTaskSeconds": 180, "perTaskTokens": 200000 },
+
+  "temperature": 0.7
+}

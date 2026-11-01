@@ -1,0 +1,106 @@
+{
+  "port": 7889,
+  "host": "127.0.0.1",
+  "providers": [
+    {
+      "name": "deepseek",
+      "tier": "cloud",
+      "base": "https://api.deepseek.com/chat/completions",
+      "model": "deepseek-chat",
+      "key": "",
+      "env": "DEEPSEEK_API_KEY",
+      "price_in": 2,
+      "price_out": 8,
+      "note": "key 去 platform.deepseek.com 申请；单价是元/百万 token，用来估账本，不是账单"
+    },
+    {
+      "name": "zhipu",
+      "tier": "cloud",
+      "base": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "model": "glm-4-flash",
+      "key": "",
+      "env": "ZHIPU_API_KEY",
+      "price_in": 0,
+      "price_out": 0,
+      "note": "key 去 open.bigmodel.cn 申请；glm-4-flash 有免费额度，单价按 0 记"
+    },
+    {
+      "name": "ollama-8b",
+      "tier": "local",
+      "base": "http://127.0.0.1:11434/v1/chat/completions",
+      "model": "qwen3:8b",
+      "key": "local",
+      "price_in": 0,
+      "price_out": 0,
+      "note": "本机 Ollama；先 ollama pull qwen3:8b。不用填 key，因为是本地起服务"
+    }
+  ],
+  "route": {
+    "mode": "cheap-first",
+    "order": [
+      "ollama-8b",
+      "zhipu",
+      "deepseek"
+    ],
+    "escalate": true,
+    "maxSteps": 12
+  },
+  "memory": {
+    "topK": 5,
+    "maxHistory": 16,
+    "autoCapture": true,
+    "writeEvents": true,
+    "eventWindowDays": 7,
+    "idleConsolidateMinutes": 60,
+    "consolidate": {
+      "dupThreshold": 0.85,
+      "oldEventDays": 60,
+      "minGroup": 4
+    }
+  },
+  "embedding": {
+    "enabled": false,
+    "base": "https://open.bigmodel.cn/api/paas/v4/embeddings",
+    "model": "embedding-3",
+    "key": "",
+    "note": "填了 key 并 enabled=true 才走向量召回；不填就纯关键词，功能不残"
+  },
+  "tools": {
+    "workspace": "data/workspace",
+    "allowCommand": true,
+    "commandWhitelist": [
+      "echo",
+      "dir",
+      "type",
+      "node",
+      "python",
+      "git",
+      "where",
+      "ls",
+      "cat",
+      "findstr"
+    ],
+    "commandTimeoutMs": 30000,
+    "maxOutput": 12000,
+    "names": null
+  },
+  "sandbox": {
+    "mode": "none",
+    "image": "node:22-alpine",
+    "note": "none=直接执行（默认）/ process=子进程+临时目录+超时 / docker=容器内，探测不到 docker 会报错并回退 process"
+  },
+  "budget": {
+    "perCallSeconds": 120,
+    "perTaskSeconds": 180,
+    "perTaskTokens": 200000
+  },
+  "temperature": 0.7,
+  "localModel": {
+    "base": "http://127.0.0.1:11434",
+    "models": {
+      "8b": "qwen3:8b",
+      "14b": "qwen3:14b"
+    },
+    "note": "自适应判定层在 6~13 分区间会问本地小模型一句；model 要写本机实际有的 tag"
+  }
+}
