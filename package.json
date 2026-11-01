@@ -33,12 +33,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-org/jingqian-single-a.git"
+    "url": "git+https://github.com/jingqian-sy/jingqian-single-a.git"
   },
   "bugs": {
-    "url": "https://github.com/your-org/jingqian-single-a/issues"
+    "url": "https://github.com/jingqian-sy/jingqian-single-a/issues"
   },
-  "homepage": "https://github.com/your-org/jingqian-single-a#readme",
+  "homepage": "https://github.com/jingqian-sy/jingqian-single-a#readme",
   "keywords": [
     "agent",
     "llm",

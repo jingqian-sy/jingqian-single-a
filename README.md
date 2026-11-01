@@ -1,6 +1,6 @@
 # 鲸倩 Jīngqiàn · 单A 开源雏版
 
-[![CI](https://github.com/your-org/jingqian-single-a/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/jingqian-single-a/actions/workflows/ci.yml)
+[![CI](https://github.com/jingqian-sy/jingqian-single-a/actions/workflows/ci.yml/badge.svg)](https://github.com/jingqian-sy/jingqian-single-a/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f6a.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933.svg)](package.json)
 
