@@ -263,7 +263,7 @@ async function handleApi(req, res, url) {
     const local = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
     if (!local) return json(res, 403, { ok: false, error: '中控台只给本机用' });
 
-    const cfgFile = path.join(ROOT, 'config.json');
+    const cfgFile = CONFIG_FILE;
     const mask = (k) => {
       const v = String(k || '');
       if (!v) return '';

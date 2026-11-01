@@ -833,6 +833,7 @@ namespace JingqianShell
                         if (input != null) { input.Select(); input.Focus(); }
                     }
                     if (ok && !VerifyOnly) CheckRadar();
+                    if (ok && !VerifyOnly && !DumpBubbles) CheckFirstRun();
                     if (ok && Environment.GetEnvironmentVariable("JQ_DEMO_SEQ") == "1") StartDemoSequence();
                     if (openSettings) OpenSettings();
                     if (!string.IsNullOrEmpty(AutoSendText))
@@ -1541,6 +1542,50 @@ namespace JingqianShell
             for (int i = 0; i < 300 && sending; i++) Thread.Sleep(150);
         }
 
+        // 给纯小白：一家模型都没接上时，别让他对着空窗口发呆，直接问要不要去填密钥
+        void CheckFirstRun()
+        {
+            try
+            {
+                Dictionary<string, object> sc = api.Get("/api/selfcheck", 4000);
+                object ps;
+                int ready = 0, total = 0;
+                if (sc.TryGetValue("providers", out ps) && ps is object[])
+                {
+                    foreach (object o in (object[])ps)
+                    {
+                        Dictionary<string, object> p = o as Dictionary<string, object>;
+                        if (p == null) continue;
+                        total++;
+                        // 本机 ollama 的 ready 只看 key（永远是 local），不代表真装了；单独探一下端口
+                        if (Convert.ToString(p.ContainsKey("tier") ? p["tier"] : "") == "local") continue;
+                        if (p.ContainsKey("ready") && Convert.ToBoolean(p["ready"])) ready++;
+                    }
+                }
+                bool ollamaUp = false;
+                try
+                {
+                    using (System.Net.Sockets.TcpClient c = new System.Net.Sockets.TcpClient())
+                    {
+                        IAsyncResult ar = c.BeginConnect("127.0.0.1", 11434, null, null);
+                        ollamaUp = ar.AsyncWaitHandle.WaitOne(350) && c.Connected;
+                    }
+                }
+                catch { }
+                if (ready > 0 || ollamaUp || total == 0) return;
+                DialogResult r = MessageBox.Show(this,
+                    "还没接上模型，先填一家才能聊。\n\n"
+                    + "推荐顺序：\n"
+                    + "1）智谱 GLM-4-Flash —— 有免费额度，注册就能拿 key\n"
+                    + "2）DeepSeek —— 便宜，几块钱能用很久\n"
+                    + "3）本机 Ollama —— 完全免费，但要先装\n\n"
+                    + "现在去填吗？填完关掉窗口重开就行。",
+                    "鲸倩 · 第一次用", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                if (r == DialogResult.Yes) OpenSettings();
+            }
+            catch { }
+        }
+
         // 同步把历史铺进气泡（返回铺了几条）；先 web（网页/软件版共用这个 session），
         // 没有再看 desktop（老版本软件版留下的），保证「服务里有对话，窗口就能看见」。
         public int LoadHistoryNow()
@@ -1737,6 +1782,7 @@ namespace JingqianShell
         TextBox txtWhitelist, txtQQUrl, txtQQToken;
         CheckBox chkMemory, chkShowKey;
         Button btnQQFind, btnQQLink, btnQQUnlink, btnAdd, btnDel;
+        FlatBtn btnApplyKey;
         Label lblQQStatus;
         Panel headerPanel, contentPanel, footerPanel;
         FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnPersona, btnRefreshStats, btnTestModel;
@@ -1905,6 +1951,8 @@ namespace JingqianShell
             Hint("服务地址一般不用改；改端口后要重启服务才生效。", 14, 94);
 
             Section("模型提供方", 14, 130);
+            btnApplyKey = SmallBtn("申请密钥", 376, 124, 88, true);
+            btnApplyKey.Click += delegate { OpenApplyUrl(); };
             btnAdd = SmallBtn("新增", 470, 124, 70, false);
             btnAdd.Click += delegate { AddProvider(); };
             btnDel = SmallBtn("删除", 546, 124, 70, false);
@@ -1918,9 +1966,10 @@ namespace JingqianShell
             list.BackColor = Color.White;
             list.Font = Theme.Ui(9f, false);
             list.SetBounds(Dpi.X(14), Dpi.X(162), Dpi.X(596), Dpi.X(148));
-            list.Columns.Add("名字", Dpi.X(120));
-            list.Columns.Add("档位", Dpi.X(64));
-            list.Columns.Add("模型", Dpi.X(150));
+            list.Columns.Add("名字", Dpi.X(110));
+            list.Columns.Add("状态", Dpi.X(56));
+            list.Columns.Add("档位", Dpi.X(56));
+            list.Columns.Add("模型", Dpi.X(120));
             list.Columns.Add("base", Dpi.X(254));
             list.AccessibleName = "cfgProviders";
             list.SelectedIndexChanged += delegate
@@ -1932,7 +1981,7 @@ namespace JingqianShell
                 }
             };
             contentPanel.Controls.Add(list);
-            Hint("新增/删除只改这份列表；点保存才写进 config.json。", 14, 314);
+            Hint("新手：在上面选一家「未填」的 → 点「申请密钥」去拿 key → 粘到下面「密钥」→ 保存 → 关掉窗口重开就能用。", 14, 314);
 
             Section("选中的提供方", 14, 352);
             Cap("base", 14, 382);
@@ -1959,6 +2008,7 @@ namespace JingqianShell
             cmbTier.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbTier.Font = Theme.Ui(9.5f, false);
             cmbTier.SetBounds(Dpi.X(14), Dpi.X(532), Dpi.X(140), Dpi.X(26));
+            cmbTier.Items.Add("free");
             cmbTier.Items.Add("local");
             cmbTier.Items.Add("cloud");
             cmbTier.AccessibleName = "cfgTier";
@@ -2455,8 +2505,11 @@ namespace JingqianShell
             list.Items.Clear();
             foreach (Dictionary<string, object> p in providers)
             {
+                string key = Get(p, "key");
+                bool local = Get(p, "tier") == "local";
+                string state = (key.Length > 0 || local) ? "已填" : "未填";
                 string[] row = new string[] {
-                    Get(p, "name"), Get(p, "tier"), Get(p, "model"), Get(p, "base")
+                    Get(p, "name"), state, Get(p, "tier"), Get(p, "model"), Get(p, "base")
                 };
                 list.Items.Add(new ListViewItem(row));
             }
@@ -2476,7 +2529,31 @@ namespace JingqianShell
             txtModel.Text = Get(p, "model");
             txtKey.Text = Get(p, "key");
             string tier = Get(p, "tier");
-            cmbTier.SelectedItem = tier == "local" ? "local" : "cloud";
+            cmbTier.SelectedItem = (tier == "local" || tier == "free") ? tier : "cloud";
+            if (btnApplyKey != null)
+            {
+                string url = Get(p, "applyUrl");
+                btnApplyKey.Enabled = url.Length > 0;
+            }
+        }
+
+        // 新手最缺这一步：直接把人送到拿 key 的页面，别让他自己找
+        void OpenApplyUrl()
+        {
+            if (current < 0 || current >= providers.Count) return;
+            string url = Get(providers[current], "applyUrl");
+            if (url.Length == 0) { lblTestResult.Text = "这家没配申请地址，去官网注册后把 key 粘到密钥里"; lblTestResult.ForeColor = Theme.Warn; return; }
+            try
+            {
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                lblTestResult.Text = "已打开申请页：注册 → 复制 key → 粘到下面「密钥」→ 保存";
+                lblTestResult.ForeColor = Theme.Dim;
+            }
+            catch (Exception ex)
+            {
+                lblTestResult.Text = "打不开浏览器：" + ex.Message + "（手动访问 " + url + "）";
+                lblTestResult.ForeColor = Theme.Warn;
+            }
         }
 
         void UpdateQQState()

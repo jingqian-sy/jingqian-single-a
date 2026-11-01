@@ -130,6 +130,10 @@ function writeCfg(provider, extra) {
   try {
     let app = startApp(writeCfg({}), path.join(TMP, 'data'));
     ok(await waitServer(8000), '服务起得来（文本附件）');
+    // 回归：中控台必须读写 JQ_CONFIG 指的那份配置，别串到仓库里的 config.json
+    const cfgGet = await (await fetch('http://127.0.0.1:' + APP_PORT + '/api/config')).json();
+    const p0 = cfgGet && cfgGet.config && cfgGet.config.providers && cfgGet.config.providers[0];
+    ok(p0 && p0.name === 'mock', '中控台读的是 JQ_CONFIG 指定的配置（不串到仓库 config.json）', JSON.stringify(p0 && p0.name));
     const r1 = await (await fetch('http://127.0.0.1:' + APP_PORT + '/api/chat', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ message: '看看这个日志', attachments: [txt] })

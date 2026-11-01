@@ -195,13 +195,18 @@ chmod +x run.sh && ./run.sh
 
 第一次跑会从 `config.example.json` 复制一份 `config.json`，然后浏览器打开 `http://127.0.0.1:7889`。
 
-接模型，二选一：
+接模型，二选一（**配置里已经内置好三家云端，只差 key，不用自己找 base/model**）：
 
-1. **云端（便宜、快）**：去 platform.deepseek.com 或 open.bigmodel.cn 申请一个 key，
-   填进 `config.json` 里对应 provider 的 `key`。也可以不填进文件，用环境变量
-   `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY`——配置里 `"env"` 字段就是干这个的。
+1. **云端（便宜、快）**：`config.example.json` 里已经写好 智谱 GLM-4-Flash（有免费额度）、
+   DeepSeek、硅基流动 三家，`key` 都是空的。注册拿到 key 粘进去就能用；软件版设置页里有
+   「申请密钥」按钮，直接把你送到申请页。也可以不写进文件，用环境变量
+   `ZHIPU_API_KEY` / `DEEPSEEK_API_KEY` / `SILICONFLOW_API_KEY`——配置里 `"env"` 字段就是干这个的。
 2. **本地（不要钱、慢一点）**：装好 Ollama 后 `ollama pull qwen3:8b`，配置里已经有一条
    `ollama-8b`，`run.cmd` 起来就能直接用。
+
+软件版的做法更贴近小白：第一次打开如果一家都没接上，会直接弹一句「先填一家模型」，
+带推荐顺序（智谱免费 → DeepSeek 便宜 → Ollama 不花钱）；进设置后列表里每一家都标着
+「已填 / 未填」，选中点「申请密钥」就去拿。
 
 想省事，一条命令：
 

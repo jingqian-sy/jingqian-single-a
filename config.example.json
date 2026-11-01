@@ -3,27 +3,41 @@
   "host": "127.0.0.1",
   "providers": [
     {
-      "name": "deepseek",
-      "tier": "cloud",
-      "base": "https://api.deepseek.com/chat/completions",
-      "model": "deepseek-chat",
-      "key": "",
-      "env": "DEEPSEEK_API_KEY",
-      "price_in": 2,
-      "price_out": 8,
-      "note": "key 去 platform.deepseek.com 申请；单价是元/百万 token，用来估账本，不是账单"
-    },
-    {
       "name": "zhipu",
       "tier": "free",
       "base": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
       "model": "glm-4-flash",
       "key": "",
       "env": "ZHIPU_API_KEY",
+      "applyUrl": "https://open.bigmodel.cn/usercenter/apikeys",
       "price_in": 0,
       "price_out": 0,
       "freeQuota": { "amount": 2000000, "unit": "token", "reset": "day" },
-      "note": "key 去 open.bigmodel.cn 申请；glm-4-flash 有免费额度，单价按 0 记。tier=free 表示走额度闸门（见 docs/额度策略.md）：账本超了就跳过、探测报 429 也跳过；freeQuota 是上限参考值，单位写 token，或者写 {amount:200, unit:'wan'} 表示「200 万」"
+      "note": "智谱 GLM-4-Flash：有免费额度，新手先用这家。key 去 applyUrl 拿（注册→API Keys→复制）；tier=free 会走额度闸门（见 docs/额度策略.md）"
+    },
+    {
+      "name": "deepseek",
+      "tier": "cloud",
+      "base": "https://api.deepseek.com/chat/completions",
+      "model": "deepseek-chat",
+      "key": "",
+      "env": "DEEPSEEK_API_KEY",
+      "applyUrl": "https://platform.deepseek.com/api_keys",
+      "price_in": 2,
+      "price_out": 8,
+      "note": "DeepSeek：key 去 applyUrl 拿（注册→API keys→创建）。单价是元/百万 token，用来估账本，不是账单"
+    },
+    {
+      "name": "siliconflow",
+      "tier": "free",
+      "base": "https://api.siliconflow.cn/v1/chat/completions",
+      "model": "Qwen/Qwen2.5-7B-Instruct",
+      "key": "",
+      "env": "SILICONFLOW_API_KEY",
+      "applyUrl": "https://cloud.siliconflow.cn/account/ak",
+      "price_in": 0,
+      "price_out": 0,
+      "note": "硅基流动：key 去 applyUrl 拿；这个模型有免费额度，走额度闸门，429 会自动跳过换下一家"
     },
     {
       "name": "ollama-8b",
@@ -33,15 +47,17 @@
       "key": "local",
       "price_in": 0,
       "price_out": 0,
-      "note": "本机 Ollama；先 ollama pull qwen3:8b。不用填 key，因为是本地起服务"
+      "applyUrl": "https://ollama.com/download",
+      "note": "本机 Ollama：不用填 key，但要先装 Ollama 并 ollama pull qwen3:8b；没装就当它不存在"
     }
   ],
   "route": {
     "mode": "cheap-first",
     "order": [
-      "ollama-8b",
       "zhipu",
-      "deepseek"
+      "deepseek",
+      "siliconflow",
+      "ollama-8b"
     ],
     "escalate": true,
     "maxSteps": 12
