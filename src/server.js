@@ -287,6 +287,11 @@ async function handleApi(req, res, url) {
       if (body.port) next.port = Number(body.port);
       if (body.route) next.route = Object.assign({}, next.route, body.route);
       if (body.memory) next.memory = Object.assign({}, next.memory, body.memory);
+      // 人格：一段自由文本；空字符串 = 回到内置默认人格
+      if (typeof body.persona === 'string') {
+        if (body.persona.trim()) next.persona = body.persona;
+        else delete next.persona;
+      }
       if (body.sandbox) next.sandbox = Object.assign({}, next.sandbox, { mode: String(body.sandbox.mode || 'none') });
       if (body.qq) {
         // QQ 适配层配置（默认关）：网关地址/令牌/白名单/群白名单

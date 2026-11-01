@@ -1710,7 +1710,9 @@ namespace JingqianShell
         Button btnQQFind, btnQQLink, btnQQUnlink, btnAdd, btnDel;
         Label lblQQStatus;
         Panel headerPanel, contentPanel, footerPanel;
-        FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnRefreshStats, btnTestModel;
+        FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnPersona, btnRefreshStats, btnTestModel;
+        TextBox txtPersona;
+        FlatBtn btnResetPersona;
         Label lblStatus, lblTestResult;
         ComboBox cmbRouteMode;
         TextBox txtRouteOrder, txtMaxSteps, txtTopK, txtMaxHistory;
@@ -1777,6 +1779,11 @@ namespace JingqianShell
             btnConsole.Click += delegate { ScrollToConsole(); };
             headerPanel.Controls.Add(btnConsole);
 
+            btnPersona = new FlatBtn("人格", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
+            btnPersona.Font = Theme.Ui(8.5f, true);
+            btnPersona.Click += delegate { ScrollToPersona(); };
+            headerPanel.Controls.Add(btnPersona);
+
             footerPanel = new Panel();
             footerPanel.Dock = DockStyle.Bottom;
             footerPanel.Height = Dpi.X(58);
@@ -1806,21 +1813,27 @@ namespace JingqianShell
             contentPanel.BringToFront();
 
             BuildUi();
-            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(1220));
+            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(1460));
             LayoutChrome();
             LoadConfig();
             ApplyRound();
             Resize += delegate { LayoutChrome(); ApplyRound(); };
-            // 截图/验收用：JQ_CFG_SCROLL=1 打开设置时直接滚到中控台
+            // 截图/验收用：JQ_CFG_SCROLL=1 滚到中控台，=2 滚到人格
             if (Environment.GetEnvironmentVariable("JQ_CFG_SCROLL") == "1")
                 Shown += delegate { ScrollToConsole(); };
+            if (Environment.GetEnvironmentVariable("JQ_CFG_SCROLL") == "2")
+                Shown += delegate { ScrollToPersona(); };
         }
 
         void LayoutChrome()
         {
             if (headerPanel == null) return;
             if (btnClose != null) btnClose.SetBounds(headerPanel.Width - Dpi.X(42), Dpi.X(8), Dpi.X(30), Dpi.X(30));
-            if (btnConsole != null) btnConsole.SetBounds(headerPanel.Width - Dpi.X(42) - Dpi.X(92), Dpi.X(9), Dpi.X(84), Dpi.X(28));
+            if (btnConsole != null)
+            {
+                btnConsole.SetBounds(headerPanel.Width - Dpi.X(42) - Dpi.X(92), Dpi.X(9), Dpi.X(84), Dpi.X(28));
+                if (btnPersona != null) btnPersona.SetBounds(btnConsole.Left - Dpi.X(6) - Dpi.X(64), Dpi.X(9), Dpi.X(64), Dpi.X(28));
+            }
             if (btnSave != null)
             {
                 btnSave.SetBounds(footerPanel.Width - Dpi.X(216), Dpi.X(11), Dpi.X(96), Dpi.X(36));
@@ -2037,6 +2050,34 @@ namespace JingqianShell
             contentPanel.Controls.Add(chkAllowCommand);
 
             Hint("改完点最下面「保存」；端口、模型、沙盒这些要重启服务才生效。", 14, 1178);
+
+            // ---------- 人格 ----------
+            Section("人格", 14, 1218);
+            Hint("她是谁、怎么说话，全写在这段里（会作为 system 提示词）。留空 = 用内置默认人格。", 14, 1248);
+            txtPersona = new TextBox();
+            txtPersona.Multiline = true;
+            txtPersona.ScrollBars = ScrollBars.Vertical;
+            txtPersona.BorderStyle = BorderStyle.FixedSingle;
+            txtPersona.BackColor = Color.White;
+            txtPersona.Font = Theme.Ui(9.5f, false);
+            txtPersona.SetBounds(Dpi.X(14), Dpi.X(1278), Dpi.X(596), Dpi.X(120));
+            txtPersona.AccessibleName = "cfgPersona";
+            contentPanel.Controls.Add(txtPersona);
+
+            btnResetPersona = SmallBtn("恢复默认", 14, 1408, 92, false);
+            btnResetPersona.Click += delegate
+            {
+                txtPersona.Text = "";
+                lblTestResult.Text = "已清空：保存后就用内置默认人格";
+                lblTestResult.ForeColor = Theme.Dim;
+            };
+            Label ph = new Label();
+            ph.AutoSize = false;
+            ph.Font = Theme.Ui(8.5f, false);
+            ph.ForeColor = Theme.Dim;
+            ph.Text = "内置默认：叫鲸倩、短句口语、不列清单、不说自己是什么模型、不知道就说不确定。";
+            ph.SetBounds(Dpi.X(114), Dpi.X(1412), Dpi.X(500), Dpi.X(24));
+            contentPanel.Controls.Add(ph);
         }
 
         // 中控台：把运行状态拉下来拼成两行字（没连上就直说，不编）
@@ -2155,6 +2196,13 @@ namespace JingqianShell
         {
             if (contentPanel == null || lblStatus == null) return;
             contentPanel.AutoScrollPosition = new Point(0, contentPanel.AutoScrollMinSize.Height);
+            contentPanel.Invalidate();
+        }
+
+        void ScrollToPersona()
+        {
+            if (contentPanel == null || txtPersona == null) return;
+            contentPanel.AutoScrollPosition = new Point(0, txtPersona.Top);
             contentPanel.Invalidate();
         }
 
@@ -2363,6 +2411,7 @@ namespace JingqianShell
                 txtQQUrl.Text = qqGateway;
                 txtQQToken.Text = qqToken;
                 UpdateQQState();
+                txtPersona.Text = cfg.ContainsKey("persona") ? Convert.ToString(cfg["persona"]) : "";
                 RefreshStats();
             }
             catch (Exception ex)
@@ -2550,6 +2599,7 @@ namespace JingqianShell
                 }
                 rb["order"] = order;
                 body["route"] = rb;
+                body["persona"] = txtPersona.Text.Trim();
                 Dictionary<string, object> qb = new Dictionary<string, object>();
                 qb["enabled"] = qqConnected;
                 qb["gateway"] = (qqGateway.Length > 0 ? qqGateway : txtQQUrl.Text.Trim());
