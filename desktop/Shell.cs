@@ -141,7 +141,7 @@ namespace JingqianShell
         {
             Dictionary<string, object> body = new Dictionary<string, object>();
             body["message"] = message;
-            body["session"] = "desktop";
+            body["session"] = "web";
             Dictionary<string, object> r = Post("/api/chat", body, 180000);
             stats = "";
             trace = new List<Dictionary<string, object>>();
@@ -160,12 +160,12 @@ namespace JingqianShell
             return r.ContainsKey("reply") ? Convert.ToString(r["reply"]) : "（空回复）";
         }
 
-        public List<Dictionary<string, object>> History()
+        public List<Dictionary<string, object>> History(string session)
         {
             List<Dictionary<string, object>> list = new List<Dictionary<string, object>>();
             try
             {
-                Dictionary<string, object> r = Get("/api/history?session=desktop&limit=40", 3000);
+                Dictionary<string, object> r = Get("/api/history?session=" + Uri.EscapeDataString(session) + "&limit=40", 3000);
                 object items;
                 if (r.TryGetValue("items", out items) && items is object[])
                 {
@@ -354,6 +354,9 @@ namespace JingqianShell
             AutoScrollPosition = new Point(0, h);
         }
 
+        public void ScrollToEndPublic() { ScrollToEnd(); }
+        public int Count { get { return msgs.Count; } }
+
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
@@ -383,7 +386,9 @@ namespace JingqianShell
             g.Clear(Theme.Bg);
             int pad = Dpi.X(16);
             int maxW = Math.Max(Dpi.X(160), ClientSize.Width - pad * 2 - Dpi.X(24));
-            int y = Dpi.X(12) - AutoScrollPosition.Y;
+            // WinForms 的 AutoScrollPosition getter 返回负的滚动量（往下滚 = 负数），
+            // 所以要「加上」它才是内容在视口里的 y；之前用减号会把内容画到视口外，表现为消息区空白。
+            int y = Dpi.X(12) + AutoScrollPosition.Y;
             foreach (Msg m in msgs)
             {
                 if (m.Kind == "note")
@@ -539,6 +544,10 @@ namespace JingqianShell
         ToolTip tip;
         int statTick;
         public bool VerifyOnly;
+        public bool DumpBubbles;
+        public string DumpShotPath;
+        public int DumpCount;
+        public string AutoSendText;
         System.Windows.Forms.Timer statusTimer;
         bool sending;
 
@@ -556,6 +565,12 @@ namespace JingqianShell
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
             if (Height > wa.Height - Dpi.X(24)) Height = wa.Height - Dpi.X(24);
             if (Width > wa.Width - Dpi.X(24)) Width = wa.Width - Dpi.X(24);
+            if (Environment.GetEnvironmentVariable("JQ_SHELL_OFFSCREEN") == "1")
+            {
+                StartPosition = FormStartPosition.Manual;
+                Location = new Point(-30000, -30000);
+                ShowInTaskbar = false;
+            }
             BackColor = Theme.Bg;
             DoubleBuffered = true;
             AutoScaleMode = AutoScaleMode.None;
@@ -572,11 +587,52 @@ namespace JingqianShell
             Shown += delegate
             {
                 ApplyRound();
-                if (!VerifyOnly) LoadHistory();
                 StartServiceAsync(delegate (bool ok)
                 {
                     SetOnline(ok);
+                    // 正常启动路径：服务起来后再拉历史（最多重试 3 次，1 秒一次），
+                    // 拉到就把滚动条拉到底；这里同步做，避免异步回调抢在句柄/布局前面。
+                    int bubbles = VerifyOnly ? 0 : LoadHistoryWithRetry(0);
+                    if (DumpBubbles)
+                    {
+                        DumpCount = bubbles;
+                        try { RefreshStats(); } catch { }
+                        Console.WriteLine("bubbles=" + bubbles + " (session=web, 服务状态=" + (ok ? "up" : "down") + ")");
+                        try
+                        {
+                            string p = string.IsNullOrEmpty(DumpShotPath) ? null : DumpShotPath;
+                            if (p != null)
+                            {
+                                using (Bitmap bmp = new Bitmap(Width, Height))
+                                {
+                                    using (Graphics g = Graphics.FromImage(bmp))
+                                    {
+                                        IntPtr hdc = g.GetHdc();
+                                        bool cap = Native.PrintWindow(Handle, hdc, 0);
+                                        g.ReleaseHdc(hdc);
+                                        if (!cap) { hdc = g.GetHdc(); Native.PrintWindow(Handle, hdc, 0); g.ReleaseHdc(hdc); }
+                                    }
+                                    bmp.Save(p, System.Drawing.Imaging.ImageFormat.Png);
+                                }
+                                Console.WriteLine("shot " + p);
+                            }
+                        }
+                        catch (Exception ex) { Console.WriteLine("shot fail " + ex.Message); }
+                        Close();
+                        return;
+                    }
+                    if (ok)
+                    {
+                        Activate();
+                        if (input != null) { input.Select(); input.Focus(); }
+                    }
                     if (openSettings) OpenSettings();
+                    if (!string.IsNullOrEmpty(AutoSendText))
+                    {
+                        string t = AutoSendText;
+                        AutoSendText = null;
+                        if (ok) SendText(t);
+                    }
                 });
             };
             Resize += delegate
@@ -949,23 +1005,70 @@ namespace JingqianShell
             });
         }
 
+        // 同步把历史铺进气泡（返回铺了几条）；先 web（网页/软件版共用这个 session），
+        // 没有再看 desktop（老版本软件版留下的），保证「服务里有对话，窗口就能看见」。
+        public int LoadHistoryNow()
+        {
+            if (chatView != null && chatView.Count > 0) return chatView.Count;  // 已经铺过就别重复铺
+            int n = 0;
+            List<Dictionary<string, object>> items = api.History("web");
+            if (items.Count == 0) items = api.History("desktop");
+            foreach (Dictionary<string, object> it in items)
+            {
+                string role = it.ContainsKey("role") ? Convert.ToString(it["role"]) : "";
+                // 兼容两种字段：服务端 items 用 content；有些桥接/旧数据用 text
+                string content = it.ContainsKey("content") ? Convert.ToString(it["content"])
+                    : (it.ContainsKey("text") ? Convert.ToString(it["text"]) : "");
+                if (content.Trim().Length == 0) continue;
+                chatView.Add(role == "user", content);
+                n++;
+            }
+            if (n > 0) chatView.ScrollToEndPublic();
+            return n;
+        }
+
+        // 服务可能刚起，接口还没就绪：最多重试 3 次、间隔 1 秒
+        public int LoadHistoryWithRetry(int initialDelayMs)
+        {
+            if (initialDelayMs > 0) Thread.Sleep(initialDelayMs);
+            for (int i = 0; i < 3; i++)
+            {
+                int n = LoadHistoryNow();
+                if (n > 0) return n;
+                Thread.Sleep(1000);
+            }
+            return 0;
+        }
+
         void LoadHistory()
         {
             ThreadPool.QueueUserWorkItem(delegate
             {
-                List<Dictionary<string, object>> items = api.History();
+                List<Dictionary<string, object>> items = api.History("web");
+                if (items.Count == 0) items = api.History("desktop");
                 if (items.Count == 0) return;
-                BeginInvoke((MethodInvoker)delegate
+                try
                 {
-                    foreach (Dictionary<string, object> it in items)
+                    BeginInvoke((MethodInvoker)delegate
                     {
-                        string role = it.ContainsKey("role") ? Convert.ToString(it["role"]) : "";
-                        string content = it.ContainsKey("content") ? Convert.ToString(it["content"]) : "";
-                        if (content.Trim().Length == 0) continue;
-                        chatView.Add(role == "user", content);
-                    }
-                });
+                        foreach (Dictionary<string, object> it in items)
+                        {
+                            string role = it.ContainsKey("role") ? Convert.ToString(it["role"]) : "";
+                            string content = it.ContainsKey("content") ? Convert.ToString(it["content"]) : "";
+                            if (content.Trim().Length == 0) continue;
+                            chatView.Add(role == "user", content);
+                        }
+                        chatView.ScrollToEndPublic();
+                    });
+                }
+                catch { }
             });
+        }
+
+        public void SendText(string text)
+        {
+            input.Text = text;
+            SendCurrent();
         }
 
         void SendCurrent()
@@ -1014,6 +1117,7 @@ namespace JingqianShell
                         caption.StatusText = stats.Length > 0 ? ("在 · 上一条 " + stats) : "在";
                         caption.Invalidate();
                         RefreshStats();
+                        if (input != null) { input.Select(); input.Focus(); }
                     });
                 }
                 catch { }
@@ -1055,6 +1159,7 @@ namespace JingqianShell
                     f.ShowDialog(this);
                 }
                 SetOnline(api.Ping());
+                if (input != null) { input.Select(); input.Focus(); }
             }
             catch (Exception ex)
             {
@@ -1296,7 +1401,14 @@ namespace JingqianShell
                 }
                 chkMemory.Checked = autoCap;
 
-                if (cfg.TryGetValue("qqBridge", out sub) && sub is Dictionary<string, object>)
+                if (cfg.TryGetValue("qq", out sub) && sub is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> qd = (Dictionary<string, object>)sub;
+                    chkQQ.Checked = qd.ContainsKey("enabled") && Convert.ToBoolean(qd["enabled"]);
+                    txtQQUrl.Text = qd.ContainsKey("gateway") ? Convert.ToString(qd["gateway"]) : "";
+                    txtQQToken.Text = qd.ContainsKey("token") ? Convert.ToString(qd["token"]) : "";
+                }
+                else if (cfg.TryGetValue("qqBridge", out sub) && sub is Dictionary<string, object>)
                 {
                     Dictionary<string, object> qd = (Dictionary<string, object>)sub;
                     chkQQ.Checked = qd.ContainsKey("enabled") && Convert.ToBoolean(qd["enabled"]);
@@ -1373,8 +1485,10 @@ namespace JingqianShell
                 body["memory"] = mb;
                 Dictionary<string, object> qb = new Dictionary<string, object>();
                 qb["enabled"] = chkQQ.Checked;
-                qb["url"] = txtQQUrl.Text.Trim();
+                qb["gateway"] = txtQQUrl.Text.Trim();
                 qb["token"] = txtQQToken.Text;
+                qb["url"] = txtQQUrl.Text.Trim();
+                body["qq"] = qb;
                 body["qqBridge"] = qb;
                 bool ok = api.SaveConfig(body);
                 if (!ok) throw new Exception("服务没确认保存成功");
@@ -1593,6 +1707,16 @@ namespace JingqianShell
                     if (!shown) fail++;
                     if (shown)
                     {
+                        // 历史：服务里有对话就必须铺进窗口；没有历史才显示欢迎语
+                        try
+                        {
+                            int expected = new ApiClient(baseUrl).History("web").Count
+                                + new ApiClient(baseUrl).History("desktop").Count;
+                            int loaded = f.LoadHistoryNow();
+                            Console.WriteLine("HISTORY loaded=" + loaded + " serverHas=" + (expected > 0 ? "yes" : "no"));
+                            if (expected > 0 && loaded == 0) { fail++; Console.WriteLine("HISTORY FAIL 服务有历史但窗口没铺出来"); }
+                        }
+                        catch (Exception ex) { Console.WriteLine("HISTORY FAIL " + ex.Message); fail++; }
                         string png = Path.Combine(repo, "desktop", "_verify-window.png");
                         try
                         {
@@ -1709,6 +1833,8 @@ namespace JingqianShell
             string repo = FindRepoRoot();
             string baseUrl = "http://127.0.0.1:7889";
             string model = null;
+            string sendText = null;
+            string shotPath = null;
             bool settings = false;
             string mode = "ui";
             for (int i = 0; i < args.Length; i++)
@@ -1716,8 +1842,11 @@ namespace JingqianShell
                 if (args[i] == "--smoke") mode = "smoke";
                 else if (args[i] == "--ensure-service") mode = "ensure";
                 else if (args[i] == "--verify") mode = "verify";
+                else if (args[i] == "--dump-bubbles") mode = "dump";
+                else if (args[i] == "--shot" && i + 1 < args.Length) shotPath = args[++i];
                 else if (args[i] == "--settings") settings = true;
                 else if (args[i] == "--url" && i + 1 < args.Length) baseUrl = args[++i];
+                else if (args[i] == "--send" && i + 1 < args.Length) sendText = args[++i];
                 else if (args[i] == "--set-model" && i + 1 < args.Length) { model = args[++i]; mode = "setmodel"; }
             }
             if (mode != "ui")
@@ -1760,7 +1889,17 @@ namespace JingqianShell
 
             using (MainForm f = new MainForm(repo, baseUrl, settings))
             {
+                f.AutoSendText = sendText;
+                if (mode == "dump")
+                {
+                    f.DumpBubbles = true;
+                    f.DumpShotPath = shotPath;
+                    f.StartPosition = FormStartPosition.Manual;
+                    f.Location = new Point(-30000, -30000);
+                    f.ShowInTaskbar = false;
+                }
                 Application.Run(f);
+                if (mode == "dump") return f.DumpCount > 0 ? 0 : 2;
             }
             return 0;
         }

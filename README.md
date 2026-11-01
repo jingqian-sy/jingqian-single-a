@@ -25,7 +25,9 @@ tok/s、缓存、上下文、今日调用、走哪家、时钟。详见 [docs/�
 ![软件版界面](docs/assets/desktop.png)
 
 <sub>真实截图（离屏验证时抓的）：顶部按钮、消息区、工具调用小字、输入框、底部数据栏。
-跑 `desktop\鲸倩.exe --verify` 可以自己复现这四项自检（不弹窗）。</sub>
+跑 `desktop\鲸倩.exe --verify` 可以自己复现这四项自检（不弹窗）。
+录演示时用 `desktop\鲸倩.exe --send "一句话"`，会走同一套发送逻辑，不用模拟键盘。
+打开时会先拉 `/api/history?session=web` 把历史铺成气泡，有历史就不显示欢迎语。</sub>
 
 **② 插件版：一行配置挂到 MCP 客户端**（DSH / Cherry Studio 这类）
 
@@ -47,6 +49,9 @@ tok/s、缓存、上下文、今日调用、走哪家、时钟。详见 [docs/�
 
 `node src/server.js` 后开 `http://127.0.0.1:7889`。三个入口（桌面 / 插件 / 网页）都是一套服务，
 网页版别写进用户教程，也别拿它当发布形态。
+
+**接 QQ（可选，默认关）**：入方向 `/api/qq/incoming`、出方向 `/api/qq/send`，白名单 + 群里 @ 才回，
+默认 `enabled:false`。怎么配、有什么风险见 [docs/接QQ.md](docs/接QQ.md)。
 
 ## 30 秒看懂
 

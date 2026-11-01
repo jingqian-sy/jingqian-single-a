@@ -213,6 +213,9 @@ async function main() {
     await stepAsync('14. 2A 编排进程重启恢复', () => nodeAsync([
       path.join(ROOT, 'evals-2a', 'restart-test.js')
     ], { RESTART_DIR: CI_DATA + '/2a-restart', RESTART_TASKS: '5', MOCK_DELAY_MS: '100' }));
+    await stepAsync('15. QQ 适配层（入/出/白名单/群里没@不回）', () => nodeAsync([
+      path.join(__dirname, 'qq-test.js')
+    ], {}));
 
     console.log('\n全部通过，用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
   } catch (e) {

@@ -101,6 +101,100 @@ class Her {
     return path.join(this.sessDir, String(sessionId || 'default').replace(/[^\w.-]/g, '_') + '.json');
   }
 
+  summaryPath(sessionId) {
+    return path.join(this.sessDir, String(sessionId || 'default').replace(/[^\w.-]/g, '_') + '.summary.md');
+  }
+
+  loadSummary(sessionId) {
+    try { return fs.readFileSync(this.summaryPath(sessionId), 'utf8').trim(); } catch (e) { return ''; }
+  }
+
+  saveSummary(sessionId, txt) {
+    try { ensureDir(this.sessDir); fs.writeFileSync(this.summaryPath(sessionId), String(txt || ''), 'utf8'); } catch (e) {}
+  }
+
+  // 丢历史之前先蒸馏：把旧对话里值得记的事实/约定捞出来存进记忆库，删了也不丢
+  async distillOld(msgs, sessionId) {
+    if (this.cfg.memory && this.cfg.memory.distillOnTrim === false) return 0;
+    const text = (msgs || []).map(function (m) {
+      return (m.role === 'user' ? '他：' : '她：') + String(m.content || '').slice(0, 300);
+    }).join('\n');
+    if (!text.trim()) return 0;
+    let items = [];
+    try {
+      const res = await this.router.call([
+        { role: 'system', content: '从这段对话里提炼值得长期记住的事。只保留：约定、偏好、忌口、重要日子、关系变化、明确的事实。'
+          + '丢弃：寒暄、技术操作、一次性的任务细节。'
+          + '输出 JSON 数组，每项 {"text":"一句不超过40字的中文事实","kind":"fact|relation|preference","pinned":true|false}。没有就输出 []。不要解释。' },
+        { role: 'user', content: text.slice(-4000) }
+      ], [], { taskText: '记忆蒸馏', temperature: 0.1, timeoutMs: 60000 });
+      const raw = String((res.json.choices && res.json.choices[0] && res.json.choices[0].message && res.json.choices[0].message.content) || '');
+      const m = raw.match(/\[[\s\S]*\]/);
+      if (m) items = JSON.parse(m[0]);
+    } catch (e) { items = []; }
+    const existing = (this.store && this.store.data && this.store.data.items) ? this.store.data.items : [];
+    const norm = (x) => String(x || '').replace(/[\s，。、！？,.!?：:；;""'']/g, '').toLowerCase();
+    const looksSameFact = (a, b) => {
+      const x = norm(a), y = norm(b);
+      if (!x || !y) return false;
+      if (x === y) return true;
+      if (x.length >= 4 && y.includes(x)) return true;
+      if (y.length >= 4 && x.includes(y)) return true;
+      // 中文短句只差一两个字：用二元组重合度兜住
+      const bigramsOf = (t) => { const set = new Set(); for (let i = 0; i + 1 < t.length; i++) set.add(t.slice(i, i + 2)); return set; };
+      const A = bigramsOf(x), B = bigramsOf(y);
+      if (!A.size || !B.size) return false;
+      let hit = 0;
+      for (const g of A) if (B.has(g)) hit++;
+      return hit / Math.min(A.size, B.size) >= 0.6;
+    };
+
+    let n = 0;
+    for (const it of items) {
+      const t = String((it && it.text) || '').trim();
+      if (!t || t.length < 4) continue;
+      if (existing.some((e) => e && e.status !== 'archived' && looksSameFact(e.text, t))) continue;
+      try {
+        const saved = this.store.add({
+          text: t,
+          kind: (it && it.kind) || 'fact',
+          importance: (it && it.pinned) ? 3 : 2,
+          pinned: !!(it && it.pinned),
+          source: 'distill:' + String(sessionId || 'default')
+        });
+        if (saved) n++;
+      } catch (e) {}
+    }
+    return n;
+  }
+
+  // 历史超过阈值就把旧的部分压成一段摘要（走当前路由，优先本地，便宜）
+  async rollSummary(history, sessionId) {
+    const max = (this.cfg.memory && this.cfg.memory.maxHistory) || 16;
+    const trigger = (this.cfg.memory && this.cfg.memory.summaryTrigger) || (max + 10);
+    const keep = (this.cfg.memory && this.cfg.memory.summaryKeep) || max;
+    const msgs = history.messages || [];
+    if (msgs.length < trigger) return history;
+    const cut = msgs.length - keep;
+    const old = msgs.slice(0, cut);
+    const prev = this.loadSummary(sessionId);
+    const text = old.map(function (m) { return (m.role === 'user' ? '他：' : '她：') + String(m.content || '').slice(0, 300); }).join('\n');
+    let sum = '';
+    try {
+      const res = await this.router.call([
+        { role: 'system', content: '把下面这段对话压成一段不超过 200 字的中文摘要，只留事实、约定和她答应过的事。不要评价、不要客套。' },
+        { role: 'user', content: (prev ? prev + '\n' : '') + text.slice(-4000) }
+      ], [], { taskText: '摘要', temperature: 0.1, timeoutMs: 60000 });
+      sum = String((res.json.choices && res.json.choices[0] && res.json.choices[0].message && res.json.choices[0].message.content) || '').trim();
+    } catch (e) { sum = ''; }
+    if (sum) this.saveSummary(sessionId, sum);
+    // 删之前先沉进记忆库，别白丢
+    try { await this.distillOld(old, sessionId); } catch (e) {}
+    history.messages = msgs.slice(cut);
+    this.saveHistory(sessionId, history);
+    return history;
+  }
+
   loadHistory(sessionId) {
     const h = readJson(this.sessionFile(sessionId), { id: sessionId, messages: [] });
     if (!Array.isArray(h.messages)) h.messages = [];
@@ -125,6 +219,8 @@ class Her {
 
   buildMessages(userText, recallRes, history) {
     const parts = [];
+    const sum = this.loadSummary(this._curSession);
+    if (sum) parts.push('【之前聊到的】\n' + sum);
     if (recallRes.block) parts.push('【参考记忆】\n' + recallRes.block);
     const ev = this.events.block(5);
     if (ev) parts.push('【事件时间轴】\n' + ev);
@@ -174,7 +270,9 @@ class Her {
       return { reply, stats: { confirmed: true, ms: Date.now() - started }, memory: null, trace: [] };
     }
 
-    const history = this.loadHistory(sessionId);
+    this._curSession = sessionId;
+    let history = this.loadHistory(sessionId);
+    try { history = await this.rollSummary(history, sessionId); } catch (e) {}
     const recallRes = await this.recallBlock(text);
     const captured = this.capture(text);
     const messages = this.buildMessages(text, recallRes, history);

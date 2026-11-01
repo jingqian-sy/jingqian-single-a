@@ -89,6 +89,15 @@
     "image": "node:22-alpine",
     "note": "none=直接执行（默认）/ process=子进程+临时目录+超时 / docker=容器内，探测不到 docker 会报错并回退 process"
   },
+  "qq": {
+    "enabled": false,
+    "gateway": "",
+    "token": "",
+    "allow": [],
+    "groups": [],
+    "self_id": "",
+    "note": "可选，默认关。gateway 是 OneBot HTTP 地址（如 http://127.0.0.1:5700）；allow 是允许私聊的 QQ 号；groups 是允许的群号；群里必须 @ 她或点名才回。"
+  },
   "budget": {
     "perCallSeconds": 120,
     "perTaskSeconds": 180,

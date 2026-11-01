@@ -19,6 +19,7 @@ const path = require('path');
 const http = require('http');
 const { URL } = require('url');
 const { Her } = require('./core');
+const qq = require('./qq/adapter');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -128,6 +129,27 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true, item: her.store.archive(body.id) });
   }
 
+  // ---------- QQ 适配层（可选，默认关） ----------
+  if (p === '/api/qq/incoming' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const r = await qq.incoming({ cfg, her, dataDir: her.dataDir, ev: body });
+      return json(res, 200, Object.assign({ source: 'qq' }, r));
+    } catch (e) {
+      return json(res, 200, { ok: false, error: e.message });
+    }
+  }
+  if (p === '/api/qq/send' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body.text || !body.to) return json(res, 400, { ok: false, error: '缺 to / text' });
+    try {
+      const r = await qq.send({ cfg, dataDir: her.dataDir, to: body.to, text: body.text, group: !!body.group });
+      return json(res, 200, r);
+    } catch (e) {
+      return json(res, 200, { ok: false, error: e.message });
+    }
+  }
+
   if (p === '/api/history') {
     const limit = Math.min(Number(url.searchParams.get('limit')) || 40, 200);
     let msgs = [];
@@ -191,8 +213,19 @@ async function handleApi(req, res, url) {
       if (body.route) next.route = Object.assign({}, next.route, body.route);
       if (body.memory) next.memory = Object.assign({}, next.memory, body.memory);
       if (body.sandbox) next.sandbox = Object.assign({}, next.sandbox, { mode: String(body.sandbox.mode || 'none') });
+      if (body.qq) {
+        // QQ 适配层配置（默认关）：网关地址/令牌/白名单/群白名单
+        next.qq = Object.assign({}, next.qq, {
+          enabled: !!body.qq.enabled,
+          gateway: String(body.qq.gateway || ''),
+          token: String(body.qq.token || ''),
+          allow: Array.isArray(body.qq.allow) ? body.qq.allow.map(String) : ((next.qq && next.qq.allow) || []),
+          groups: Array.isArray(body.qq.groups) ? body.qq.groups.map(String) : ((next.qq && next.qq.groups) || []),
+          self_id: String(body.qq.self_id || (next.qq && next.qq.self_id) || '')
+        });
+      }
       if (body.qqBridge) {
-        // QQ 桥接（可选，默认关）：只存配置，不负责真连网关
+        // 兼容旧字段：QQ 桥接（可选，默认关）
         next.qqBridge = Object.assign({}, next.qqBridge, {
           enabled: !!body.qqBridge.enabled,
           url: String(body.qqBridge.url || ''),
