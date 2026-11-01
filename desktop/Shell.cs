@@ -351,11 +351,18 @@ namespace JingqianShell
         void ScrollToEnd()
         {
             int h = Math.Max(0, contentHeight - ClientSize.Height + 16);
+            // 让顶部不要出现「半截气泡」：把滚动位置对齐到某个气泡的上沿
+            for (int i = 0; i < tops.Count; i++)
+            {
+                int t = tops[i][0], hh = tops[i][1];
+                if (h > t && h < t + hh) { h = Math.Max(0, t - Dpi.X(6)); break; }
+            }
             AutoScrollPosition = new Point(0, h);
         }
 
         public void ScrollToEndPublic() { ScrollToEnd(); }
         public int Count { get { return msgs.Count; } }
+        readonly List<int[]> tops = new List<int[]>();
 
         protected override void OnResize(EventArgs e)
         {
@@ -368,12 +375,20 @@ namespace JingqianShell
         {
             int pad = Dpi.X(16), maxW = Math.Max(Dpi.X(160), ClientSize.Width - pad * 2 - Dpi.X(24));
             int y = Dpi.X(12);
+            tops.Clear();
             foreach (Msg m in msgs)
             {
-                if (m.Kind == "note") { y += Dpi.X(38); continue; }
-                Size sz = TextRenderer.MeasureText(m.Text.Length == 0 ? " " : m.Text, font,
-                    new Size(Math.Min(maxW - Dpi.X(26), Dpi.X(340)), int.MaxValue), TextFormatFlags.WordBreak);
-                y += sz.Height + Dpi.X(40);
+                int top = y;
+                int h;
+                if (m.Kind == "note") h = Dpi.X(38);
+                else
+                {
+                    Size sz = TextRenderer.MeasureText(m.Text.Length == 0 ? " " : m.Text, font,
+                        new Size(Math.Min(maxW - Dpi.X(26), Dpi.X(340)), int.MaxValue), TextFormatFlags.WordBreak);
+                    h = sz.Height + Dpi.X(40);
+                }
+                tops.Add(new int[] { top, h });
+                y += h;
             }
             contentHeight = y;
             AutoScrollMinSize = new Size(0, y + Dpi.X(10));
@@ -404,6 +419,8 @@ namespace JingqianShell
                     new Size(Math.Min(maxW - Dpi.X(26), Dpi.X(340)), int.MaxValue), TextFormatFlags.WordBreak);
                 int bw = Math.Min(Math.Max(sz.Width + Dpi.X(26), Dpi.X(52)), maxW);
                 int bh = sz.Height + Dpi.X(22);
+                // 顶部不留半截气泡：被视口上沿切到的整条跳过（背景留白，不画残块）
+                if (y < 0) { y += bh + Dpi.X(24); continue; }
                 int x = user ? (ClientSize.Width - pad - bw) : (pad + Dpi.X(4));
                 Rectangle rr = new Rectangle(x, y, bw, bh);
                 using (GraphicsPath gp = Theme.Round(rr, Dpi.X(14)))
@@ -640,11 +657,12 @@ namespace JingqianShell
                 ApplyRound();
                 if (inputWrap != null && sendBtn != null)
                 {
-                    int w = Math.Max(Dpi.X(200), Width - Dpi.X(28) - Dpi.X(90) - Dpi.X(10));
+                    int rightW = Dpi.X(78) * 2 + Dpi.X(8);   // 发送 + 设置 并排
+                    int w = Math.Max(Dpi.X(200), Width - Dpi.X(28) - rightW - Dpi.X(10));
                     inputWrap.Width = w;
                     if (input != null) input.Width = Math.Max(Dpi.X(120), w - Dpi.X(24));
                     sendBtn.Left = inputWrap.Left + inputWrap.Width + Dpi.X(10);
-                    if (settingsBtn != null) settingsBtn.Left = sendBtn.Left;
+                    if (settingsBtn != null) settingsBtn.Left = sendBtn.Left + sendBtn.Width + Dpi.X(8);
                     if (statsLabel != null) statsLabel.Width = Math.Max(Dpi.X(200), Width - Dpi.X(110));
                 }
             };
@@ -769,12 +787,12 @@ namespace JingqianShell
             bottom.Controls.Add(inputBox);
 
             sendBtn = MakeButton("发送", Theme.Accent, Color.White);
-            sendBtn.SetBounds(Dpi.X(322), Dpi.X(10), Dpi.X(90), Dpi.X(34));
+            sendBtn.SetBounds(Dpi.X(322), Dpi.X(10), Dpi.X(78), Dpi.X(40));
             sendBtn.Click += delegate { SendCurrent(); };
             bottom.Controls.Add(sendBtn);
 
             settingsBtn = MakeButton("设置", Color.FromArgb(228, 240, 250), Theme.AccentDeep);
-            settingsBtn.SetBounds(Dpi.X(322), Dpi.X(52), Dpi.X(90), Dpi.X(32));
+            settingsBtn.SetBounds(Dpi.X(408), Dpi.X(10), Dpi.X(78), Dpi.X(40));
             settingsBtn.Click += delegate { OpenSettings(); };
             bottom.Controls.Add(settingsBtn);
 
@@ -1191,7 +1209,12 @@ namespace JingqianShell
         TextBox txtUrl, txtPort, txtBase, txtModel, txtKey;
         ComboBox cmbTier, cmbSandbox;
         TextBox txtWhitelist, txtQQUrl, txtQQToken;
-        CheckBox chkMemory, chkQQ;
+        CheckBox chkMemory, chkQQAdvanced;
+        Button btnQQFind, btnQQLink, btnQQUnlink;
+        Label lblQQStatus;
+        bool qqConnected;
+        string qqGateway, qqToken;
+        string qqNickname;
         ListView list;
         List<Dictionary<string, object>> providers = new List<Dictionary<string, object>>();
         int current = -1;
@@ -1286,21 +1309,67 @@ namespace JingqianShell
             chkMemory.AccessibleName = "cfgMemory";
             Controls.Add(chkMemory);
 
-            Label q1 = Cap("QQ 桥接（可选，默认关；只是第三个入口，聊天/记忆/工具都在本机）", 16, 532);
-            chkQQ = new CheckBox();
-            chkQQ.Text = "启用 QQ 桥接";
-            chkQQ.SetBounds(16, 552, 180, 24);
-            chkQQ.AccessibleName = "cfgQQEnabled";
-            Controls.Add(chkQQ);
-            Label q2 = Cap("网关地址", 16, 582);
-            txtQQUrl = Box(16, 602, 380);
+            Label q1 = Cap("QQ 一键连接（可选，默认关；聊天/记忆/工具都在本机）", 16, 528);
+            btnQQFind = new Button();
+            btnQQFind.Text = "自动找 QQ 桥接";
+            btnQQFind.SetBounds(16, 550, 150, 34);
+            btnQQFind.BackColor = Theme.Accent;
+            btnQQFind.ForeColor = Color.White;
+            btnQQFind.FlatStyle = FlatStyle.Flat;
+            btnQQFind.FlatAppearance.BorderSize = 0;
+            btnQQFind.AccessibleName = "cfgQQFind";
+            btnQQFind.Click += delegate { QQFind(); };
+            Controls.Add(btnQQFind);
+
+            lblQQStatus = new Label();
+            lblQQStatus.AutoSize = false;
+            lblQQStatus.Text = "QQ：未检测";
+            lblQQStatus.ForeColor = Theme.Dim;
+            lblQQStatus.SetBounds(176, 556, 300, 24);
+            Controls.Add(lblQQStatus);
+
+            btnQQLink = new Button();
+            btnQQLink.Text = "连接";
+            btnQQLink.SetBounds(486, 550, 70, 34);
+            btnQQLink.FlatStyle = FlatStyle.Flat;
+            btnQQLink.Enabled = false;
+            btnQQLink.AccessibleName = "cfgQQLink";
+            btnQQLink.Click += delegate { QQConnect(); };
+            Controls.Add(btnQQLink);
+
+            btnQQUnlink = new Button();
+            btnQQUnlink.Text = "断开";
+            btnQQUnlink.SetBounds(564, 550, 70, 34);
+            btnQQUnlink.FlatStyle = FlatStyle.Flat;
+            btnQQUnlink.Enabled = false;
+            btnQQUnlink.AccessibleName = "cfgQQUnlink";
+            btnQQUnlink.Click += delegate { QQDisconnect(); };
+            Controls.Add(btnQQUnlink);
+
+            chkQQAdvanced = new CheckBox();
+            chkQQAdvanced.Text = "高级（显示网关地址 / 令牌）";
+            chkQQAdvanced.SetBounds(16, 592, 300, 24);
+            chkQQAdvanced.AccessibleName = "cfgQQAdvanced";
+            chkQQAdvanced.CheckedChanged += delegate { ToggleQQAdvanced(); };
+            Controls.Add(chkQQAdvanced);
+
+            Label q2 = Cap("网关地址", 16, 620);
+            txtQQUrl = Box(16, 640, 380);
             txtQQUrl.AccessibleName = "cfgQQUrl";
-            Label q3 = Cap("令牌", 412, 582);
-            txtQQToken = Box(412, 602, 212);
+            Label q3 = Cap("令牌", 412, 620);
+            txtQQToken = Box(412, 640, 212);
             txtQQToken.PasswordChar = '*';
             txtQQToken.AccessibleName = "cfgQQToken";
-            Hint("没接网关时不用管它，不会报错；网桥收到消息后调本机 /api/chat，再把回复发回 QQ。", 16, 636);
-            Hint("密钥显示为掩码；不改就沿用原来的。保存后需要重启服务才生效。", 16, 658);
+            txtQQUrl.Visible = false;
+            txtQQToken.Visible = false;
+            q2.Visible = false;
+            q3.Visible = false;
+            q2.Tag = "adv";
+            q3.Tag = "adv";
+            txtQQUrl.Tag = "adv";
+            txtQQToken.Tag = "adv";
+            Hint("没接网关时不用管它，不会报错；网桥收到消息后调本机 /api/chat，再把回复发回 QQ。", 16, 664);
+            Hint("密钥显示为掩码；不改就沿用原来的。保存后需要重启服务才生效。", 16, 686);
 
             Button save = new Button();
             save.Text = "保存";
@@ -1401,26 +1470,27 @@ namespace JingqianShell
                 }
                 chkMemory.Checked = autoCap;
 
+                qqConnected = false;
+                qqGateway = "";
+                qqToken = "";
+                qqNickname = "";
                 if (cfg.TryGetValue("qq", out sub) && sub is Dictionary<string, object>)
                 {
                     Dictionary<string, object> qd = (Dictionary<string, object>)sub;
-                    chkQQ.Checked = qd.ContainsKey("enabled") && Convert.ToBoolean(qd["enabled"]);
-                    txtQQUrl.Text = qd.ContainsKey("gateway") ? Convert.ToString(qd["gateway"]) : "";
-                    txtQQToken.Text = qd.ContainsKey("token") ? Convert.ToString(qd["token"]) : "";
+                    qqConnected = qd.ContainsKey("enabled") && Convert.ToBoolean(qd["enabled"]);
+                    qqGateway = qd.ContainsKey("gateway") ? Convert.ToString(qd["gateway"]) : "";
+                    qqToken = qd.ContainsKey("token") ? Convert.ToString(qd["token"]) : "";
                 }
                 else if (cfg.TryGetValue("qqBridge", out sub) && sub is Dictionary<string, object>)
                 {
                     Dictionary<string, object> qd = (Dictionary<string, object>)sub;
-                    chkQQ.Checked = qd.ContainsKey("enabled") && Convert.ToBoolean(qd["enabled"]);
-                    txtQQUrl.Text = qd.ContainsKey("url") ? Convert.ToString(qd["url"]) : "";
-                    txtQQToken.Text = qd.ContainsKey("token") ? Convert.ToString(qd["token"]) : "";
+                    qqConnected = qd.ContainsKey("enabled") && Convert.ToBoolean(qd["enabled"]);
+                    qqGateway = qd.ContainsKey("url") ? Convert.ToString(qd["url"]) : "";
+                    qqToken = qd.ContainsKey("token") ? Convert.ToString(qd["token"]) : "";
                 }
-                else
-                {
-                    chkQQ.Checked = false;
-                    txtQQUrl.Text = "";
-                    txtQQToken.Text = "";
-                }
+                txtQQUrl.Text = qqGateway;
+                txtQQToken.Text = qqToken;
+                UpdateQQState();
             }
             catch (Exception ex)
             {
@@ -1458,6 +1528,118 @@ namespace JingqianShell
             cmbTier.SelectedItem = tier == "local" ? "local" : "cloud";
         }
 
+        void UpdateQQState()
+        {
+            if (lblQQStatus == null) return;
+            if (qqConnected)
+            {
+                lblQQStatus.Text = "QQ：已连接" + (qqNickname.Length > 0 ? "（" + qqNickname + "）" : "");
+                lblQQStatus.ForeColor = Color.FromArgb(60, 150, 100);
+                btnQQLink.Enabled = false;
+                btnQQUnlink.Enabled = true;
+            }
+            else
+            {
+                lblQQStatus.Text = "QQ：未连接（默认关，点左边按钮自动找）";
+                lblQQStatus.ForeColor = Theme.Dim;
+                btnQQLink.Enabled = qqGateway.Length > 0;
+                btnQQUnlink.Enabled = false;
+            }
+        }
+
+        void ToggleQQAdvanced()
+        {
+            bool v = chkQQAdvanced.Checked;
+            foreach (Control c in Controls)
+                if ((c.Tag as string) == "adv") c.Visible = v;
+        }
+
+        void QQFind()
+        {
+            btnQQFind.Enabled = false;
+            lblQQStatus.Text = "正在找本机 QQ 桥接…";
+            lblQQStatus.ForeColor = Theme.Dim;
+            Application.DoEvents();
+            try
+            {
+                Dictionary<string, object> r = api.Get("/api/qq/discover", 15000);
+                if (r.ContainsKey("found") && Convert.ToBoolean(r["found"]))
+                {
+                    qqGateway = Convert.ToString(r["gateway"]);
+                    qqToken = r.ContainsKey("token") ? Convert.ToString(r["token"]) : "";
+                    string oldNick = qqNickname;
+                    qqNickname = Convert.ToString(r["nickname"]) + " " + (r.ContainsKey("selfId") ? Convert.ToString(r["selfId"]) : "");
+                    lblQQStatus.Text = "找到了：" + Convert.ToString(r["nickname"]) + "（账号 " + (r.ContainsKey("selfId") ? Convert.ToString(r["selfId"]) : "?") + "），点「连接」";
+                    lblQQStatus.ForeColor = Theme.Text;
+                    btnQQLink.Enabled = true;
+                }
+                else
+                {
+                    object hints;
+                    string h = "没找到 QQ 桥接";
+                    if (r.TryGetValue("hints", out hints) && hints is object[] && ((object[])hints).Length > 0)
+                        h = Convert.ToString(((object[])hints)[0]);
+                    lblQQStatus.Text = h + "（装好点「自动找 QQ 桥接」再试）";
+                    lblQQStatus.ForeColor = Theme.Warn;
+                    btnQQLink.Enabled = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                lblQQStatus.Text = "检测失败：" + ex.Message;
+                lblQQStatus.ForeColor = Theme.Warn;
+            }
+            finally { btnQQFind.Enabled = true; }
+        }
+
+        void QQConnect()
+        {
+            btnQQLink.Enabled = false;
+            lblQQStatus.Text = "正在连接…";
+            Application.DoEvents();
+            try
+            {
+                Dictionary<string, object> body = new Dictionary<string, object>();
+                if (qqGateway.Length > 0) body["gateway"] = qqGateway;
+                if (qqToken.Length > 0 && qqToken.IndexOf("****") < 0) body["token"] = qqToken;
+                Dictionary<string, object> r = api.Post("/api/qq/connect", body, 20000);
+                if (r.ContainsKey("ok") && Convert.ToBoolean(r["ok"]))
+                {
+                    qqConnected = true;
+                    qqNickname = r.ContainsKey("nickname") ? Convert.ToString(r["nickname"]) : "";
+                    if (r.ContainsKey("gateway")) qqGateway = Convert.ToString(r["gateway"]);
+                    UpdateQQState();
+                }
+                else
+                {
+                    lblQQStatus.Text = "连接失败：" + Convert.ToString(r.ContainsKey("error") ? r["error"] : "未知原因");
+                    lblQQStatus.ForeColor = Theme.Warn;
+                    btnQQLink.Enabled = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                lblQQStatus.Text = "连接失败：" + ex.Message;
+                lblQQStatus.ForeColor = Theme.Warn;
+                btnQQLink.Enabled = true;
+            }
+        }
+
+        void QQDisconnect()
+        {
+            try
+            {
+                api.Post("/api/qq/disconnect", new Dictionary<string, object>(), 8000);
+                qqConnected = false;
+                UpdateQQState();
+            }
+            catch (Exception ex)
+            {
+                lblQQStatus.Text = "断开失败：" + ex.Message;
+                lblQQStatus.ForeColor = Theme.Warn;
+            }
+        }
+
         void Save()
         {
             try
@@ -1484,10 +1666,10 @@ namespace JingqianShell
                 mb["autoCapture"] = chkMemory.Checked;
                 body["memory"] = mb;
                 Dictionary<string, object> qb = new Dictionary<string, object>();
-                qb["enabled"] = chkQQ.Checked;
-                qb["gateway"] = txtQQUrl.Text.Trim();
-                qb["token"] = txtQQToken.Text;
-                qb["url"] = txtQQUrl.Text.Trim();
+                qb["enabled"] = qqConnected;
+                qb["gateway"] = (qqGateway.Length > 0 ? qqGateway : txtQQUrl.Text.Trim());
+                qb["token"] = txtQQToken.Text.Length > 0 ? txtQQToken.Text : qqToken;
+                qb["url"] = (qqGateway.Length > 0 ? qqGateway : txtQQUrl.Text.Trim());
                 body["qq"] = qb;
                 body["qqBridge"] = qb;
                 bool ok = api.SaveConfig(body);

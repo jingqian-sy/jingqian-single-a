@@ -20,6 +20,7 @@ const http = require('http');
 const { URL } = require('url');
 const { Her } = require('./core');
 const qq = require('./qq/adapter');
+const qqConnect = require('./qq/connect');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -44,6 +45,7 @@ function loadConfig() {
 }
 
 const cfg = loadConfig();
+const CONFIG_FILE = process.env.JQ_CONFIG ? path.resolve(ROOT, process.env.JQ_CONFIG) : path.join(ROOT, 'config.json');
 const her = new Her({ root: ROOT, cfg });
 let lastChat = null;
 const PORT = Number(process.env.PORT || cfg.port || 7889);
@@ -130,6 +132,33 @@ async function handleApi(req, res, url) {
   }
 
   // ---------- QQ 适配层（可选，默认关） ----------
+  if (p === '/api/qq/discover' && req.method === 'GET') {
+    try {
+      const r = await qqConnect.discover(cfg, her.dataDir);
+      return json(res, 200, r);
+    } catch (e) {
+      return json(res, 200, { found: false, error: e.message, hints: ['检测失败：' + e.message] });
+    }
+  }
+  if (p === '/api/qq/connect' && req.method === 'POST') {
+    const body = await readBody(req);
+    try {
+      const r = await qqConnect.connect({
+        cfg, dataDir: her.dataDir, cfgFile: CONFIG_FILE,
+        gateway: body.gateway, token: body.token
+      });
+      return json(res, 200, r);
+    } catch (e) {
+      return json(res, 200, { ok: false, error: e.message });
+    }
+  }
+  if (p === '/api/qq/disconnect' && req.method === 'POST') {
+    try {
+      return json(res, 200, qqConnect.disconnect({ cfg, dataDir: her.dataDir, cfgFile: CONFIG_FILE }));
+    } catch (e) {
+      return json(res, 200, { ok: false, error: e.message });
+    }
+  }
   if (p === '/api/qq/incoming' && req.method === 'POST') {
     const body = await readBody(req);
     try {
