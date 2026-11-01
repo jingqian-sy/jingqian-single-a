@@ -375,8 +375,8 @@ node evals-adaptive/run.js --run                           # 自适应选档跑�
 | `budget` | 单次调用 / 单轮 / 单任务的秒数与 token 上限（超了降级停下，不死等）|
 
 想一次配好几家？看 `config.multi-provider.example.json`：三家云端 + 本地，带 `quota` 字段。
-**如实说明**：`quota`（`monthly_free_tokens` / `max_concurrency`）目前只是占位，
-当前路由只按 `tier` 和单价排序，**还不会读剩余免费额度**；写在那儿是为了以后接配额账本时有统一位置。
+免费额度现在会真的参与选路：`tier: free` 的提供方先用本地账本算剩余（`<=0` 跳过），再做一次极小探测（`429`/余额类错误报 exhausted 就跳过，结果缓存 10 分钟），免费档全跳过就退付费档，连付费档都没有会明确报「免费额度都用完了」，不静默失败。三件事各能保证什么、不能保证什么，写在 [docs/额度策略.md](docs/额度策略.md)。
+**如实说明**：`quota`（`monthly_free_tokens` / `max_concurrency`）在多提供方示例里仍是占位，选路不读它；真正生效的是 providers 上的 `freeQuota` 和根上的 `quotaSources`。
 
 ## 沙盒（可选项，默认关）
 

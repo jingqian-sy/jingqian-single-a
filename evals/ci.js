@@ -9,9 +9,10 @@
  *   1. 语法检查（src/ evals/ 下所有 .js）
  *   2. 判定器单元测试（evals/test-judge.js，26 条规则）
  *   3. 工具 / 红线 / 路径 / 沙盒单元测试（evals/test-tools.js）
- *   4. 起 mock provider（本地假模型，无需密钥）
- *   5. 服务冒烟：真起 src/server.js，打 /api/chat
- *   6. 评测子集：m01 m02 t02 t08 r01 x01（跑两遍，机器判定）
+ *   4. 动态额度单元测试（evals/quota-test.js，本地假端点、不联网）
+ *   5. 起 mock provider（本地假模型，无需密钥）
+ *   6. 服务冒烟：真起 src/server.js，打 /api/chat
+ *   7. 评测子集：m01 m02 t02 t08 r01 x01（跑两遍，机器判定）
  *
  * 所有临时数据都写在 data/ci-run/ 和 evals/.run/ 下，覆盖不到你的真实记忆与成绩报表。
  */
@@ -185,36 +186,40 @@ async function main() {
     await stepAsync('1. 语法检查', syntaxCheck);
     await stepAsync('2. 判定器单元测试', () => node([path.join(__dirname, 'test-judge.js')]));
     await stepAsync('3. 工具 / 红线 / 路径 / 沙盒单元测试', () => node([path.join(__dirname, 'test-tools.js')]));
-    await stepAsync('4. 启动 mock provider', async () => {
+    await stepAsync('4. 动态额度（账本 / 规则 / 探测 / 退付费，本地假端点不联网）', () => node([path.join(__dirname, 'quota-test.js')]));
+    await stepAsync('5. 启动 mock provider', async () => {
       mock = await startMock({ port: MOCK_PORT });
       const r = await fetch('http://127.0.0.1:' + MOCK_PORT + '/health');
       if (!r.ok) throw new Error('mock provider 没起来');
       console.log('mock provider：http://127.0.0.1:' + MOCK_PORT + '/v1/chat/completions');
     });
-    await stepAsync('5. 准备 CI 配置（无密钥）', writeCiConfig);
-    await stepAsync('6. 服务冒烟（真起 server，打 /api/chat）', () => nodeAsync([path.join(__dirname, 'smoke.js')], {
+    await stepAsync('6. 准备 CI 配置（无密钥）', writeCiConfig);
+    await stepAsync('7. 服务冒烟（真起 server，打 /api/chat）', () => nodeAsync([path.join(__dirname, 'smoke.js')], {
       JQ_CONFIG: CI_CONFIG, JQ_DATA_DIR: CI_DATA, SMOKE_PORT: '7899'
     }));
-    await stepAsync('7. 评测子集（' + SUBSET.join(' ') + '）', () => nodeAsync([
+    await stepAsync('8. 评测子集（' + SUBSET.join(' ') + '）', () => nodeAsync([
       path.join(__dirname, 'run.js'), '--run', '--fresh', '--only', SUBSET.join(',')
     ], { JQ_CONFIG: CI_CONFIG, JQ_DATA_DIR: CI_DATA }));
-    await stepAsync('8. 校验子集结果', verifyResults);
-    await stepAsync('9. 3A 模板子集（mock：m01 t02 t08 r01）', () => nodeAsync([
+    await stepAsync('9. 校验子集结果', verifyResults);
+    await stepAsync('10. 3A 模板子集（mock：m01 t02 t08 r01）', () => nodeAsync([
       path.join(ROOT, 'evals-multi', 'run.js'), '--run', '--fresh', '--only', 'm01_memory_write,t02_write_file,t08_path_prefix_regression,r01_p0_format'
     ], { JQ_CONFIG: CI_CONFIG, JQ_MULTI_DIR: CI_DATA + '/multi' }));
-    await stepAsync('10. 校验 3A 子集结果', () => verifyMultiResults());
-    await stepAsync('11. 3A 调度重启恢复（kill -9 后重启接管）', () => nodeAsync([
+    await stepAsync('11. 校验 3A 子集结果', () => verifyMultiResults());
+    await stepAsync('12. 3A 调度重启恢复（kill -9 后重启接管）', () => nodeAsync([
       path.join(ROOT, 'evals-multi', 'restart-test.js')
     ], { RESTART_DIR: CI_DATA + '/3a-restart', RESTART_TASKS: '5', MOCK_DELAY_MS: '100' }));
-    await stepAsync('12. 2A 模板子集（mock：m01 t02 t08 r01）', () => nodeAsync([
+    await stepAsync('13. 2A 模板子集（mock：m01 t02 t08 r01）', () => nodeAsync([
       path.join(ROOT, 'evals-2a', 'run.js'), '--run', '--fresh', '--only', 'm01_memory_write,t02_write_file,t08_path_prefix_regression,r01_p0_format'
     ], { JQ_CONFIG: CI_CONFIG, JQ_2A_DIR: CI_DATA + '/2a' }));
-    await stepAsync('13. 校验 2A 子集结果', () => verify2AResults());
-    await stepAsync('14. 2A 编排进程重启恢复', () => nodeAsync([
+    await stepAsync('14. 校验 2A 子集结果', () => verify2AResults());
+    await stepAsync('15. 2A 编排进程重启恢复', () => nodeAsync([
       path.join(ROOT, 'evals-2a', 'restart-test.js')
     ], { RESTART_DIR: CI_DATA + '/2a-restart', RESTART_TASKS: '5', MOCK_DELAY_MS: '100' }));
-    await stepAsync('15. QQ 适配层（入/出/白名单/群里没@不回）', () => nodeAsync([
+    await stepAsync('16. QQ 适配层（入/出/白名单/群里没@不回）', () => nodeAsync([
       path.join(__dirname, 'qq-test.js')
+    ], {}));
+    await stepAsync('17. QQ 一键连接（发现/连接/写配置/断开）', () => nodeAsync([
+      path.join(__dirname, 'qq-connect-test.js')
     ], {}));
 
     console.log('\n全部通过，用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');

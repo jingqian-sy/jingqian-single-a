@@ -13,10 +13,14 @@
  * 即使 cheap-first 也先上云端——粗活给本地，值钱的判断给云端。
  *
  * 每次调用都记账（data/ledger/按天.json），失败切换写 data/route.log。
+ *
+ * 额度闸门（见 ./quota）：免费档先把「本地账本算出来的剩余」和「一次极小探测」过一遍，
+ * 用完的先跳过；免费全跳过就退付费档，连付费都没有就明确报错，不静默失败。
  */
 const fs = require('fs');
 const path = require('path');
 const { readJson, writeJson, appendJsonl, ensureDir, tokenCount } = require('./util');
+const quota = require('./quota');
 
 const HARD_WORDS = /分析|设计|架构|方案|为什么|推理|排查|代码|重构|对比|评测|写一|规划|部署/;
 
@@ -30,10 +34,30 @@ class Router {
     this.cfg = cfg || {};
     this.providers = (this.cfg.providers || []).slice();
     this.route = this.cfg.route || {};
+    this.dataDir = dataDir;
     this.dir = path.join(dataDir, 'ledger');
     this.logFile = path.join(dataDir, 'route.log');
     ensureDir(this.dir);
     this.last = { provider: '', prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost: 0, calls: 0, cache_rate: null };
+    this.lastQuota = null; // 最近一次额度闸门的结果，方便控制台/排查看
+  }
+
+  // 选路前的额度闸门：free 档先按本地账本算剩余，再做一次探测（10 分钟内复用缓存）；
+  // 免费全跳过就退付费档，一个都没有就抛 FREE_EXHAUSTED，绝不满载地失败。
+  async quotaGate(list) {
+    if (!list.length) return list;
+    const q = await quota.filterCandidates(this.cfg, list, this.dataDir);
+    const kept = q.list.filter((p) => this.ready(p));
+    this.lastQuota = { at: new Date().toISOString(), fallback: !!q.fallback, dropped: q.dropped || [], kept: kept.map((p) => p.name) };
+    if ((q.dropped || []).length) this.routeLog('额度跳过', { dropped: q.dropped });
+    if (q.fallback) this.routeLog('免费额度用尽，退付费档', { to: kept.map((p) => p.name) });
+    if (!kept.length) {
+      const err = new Error('免费额度都用完了，也没有可用的付费档：请配置一家付费模型，或等额度重置。');
+      err.code = 'FREE_EXHAUSTED';
+      err.dropped = q.dropped || [];
+      throw err;
+    }
+    return kept;
   }
 
   // 本地模型不用填 key；云端没填 key 就当作没配好，跳过而不是报错
@@ -102,11 +126,20 @@ class Router {
 
   async call(messages, tools, opts) {
     opts = opts || {};
-    const list = this.candidates(opts.taskText || '');
+    let list = this.candidates(opts.taskText || '');
     if (!list.length) {
       const err = new Error('没有可用的模型：请在 config.json 的 providers 里填一家云端 key，或者本机起一个 Ollama。');
       err.code = 'NO_PROVIDER';
       throw err;
+    }
+    if (!opts.skipQuota) {
+      try {
+        list = await this.quotaGate(list);
+      } catch (e) {
+        // 额度用尽是结论，必须原样抛；额度层自己崩了（写文件失败之类）不跟着打死请求，按候选继续但留痕
+        if (e.code === 'FREE_EXHAUSTED') throw e;
+        this.routeLog('额度闸门异常，按候选继续', { error: e.message });
+      }
     }
     let lastErr = '';
     const tried = [];
