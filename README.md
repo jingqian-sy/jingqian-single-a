@@ -34,6 +34,9 @@ tok/s、缓存、上下文、今日调用、走哪家、时钟。**文件和图�
 
 **② 插件版：一行配置挂到 MCP 客户端**（DSH / Cherry Studio 这类）
 
+给已经在用别的 AI 客户端、不想再开一个窗口的人：把「这台机器上的鲸倩」挂进去，
+那个客户端就多出 4 个工具，聊天、记忆、工具、红线全走本机服务（不是另起一套）。
+
 ```json
 {
   "mcpServers": {
@@ -45,8 +48,22 @@ tok/s、缓存、上下文、今日调用、走哪家、时钟。**文件和图�
 }
 ```
 
-挂上后有 4 个工具：`ask` / `memory_search` / `memory_remember` / `stats`。
-和软件版共用同一台本机服务、同一份记忆，见 [docs/插件版.md](docs/插件版.md)。
+- `command` 要能找到 `node`；找不到就写 node 的绝对路径（比如 `C:\\Users\\你\\AppData\\Local\\Jingqian\\runtime\\node-v22.14.0-win-x64\\node.exe`）。
+- 服务地址默认 `http://127.0.0.1:7889`，换端口用环境变量 `JINGQIAN_URL`。
+- 服务没起时插件版会自己拉一次 `node src/server.js`，和软件版同一套逻辑。
+
+挂上后多出的 4 个工具：
+
+| 工具 | 干什么 | 背后接口 |
+| --- | --- | --- |
+| `ask` | 跟鲸倩说一句话，返回她的原话（带人格、记忆、工具、红线） | `POST /api/chat` |
+| `memory_search` | 搜这台机器的记忆库 | `GET /api/memory?query=` |
+| `memory_remember` | 写一条记忆（可 pinned） | `POST /api/memory` |
+| `stats` | 模型 / 今日调用 / tokens / 记忆条数 | `GET /api/stats` |
+
+和软件版共用同一台本机服务、同一份记忆——插件里记的事，软件版打开就能看到。
+只适合本机客户端，**没有鉴权，别把 7889 暴露到公网**。细节见 [docs/插件版.md](docs/插件版.md)；
+自测跑 `node evals/mcp-test.js`（真按 MCP stdio 协议聊一遍，14 条断言，不联网）。
 
 **③ 网页版：开发调试用，不是给用户的功能形态**
 
