@@ -107,8 +107,18 @@ async function main() {
   // 7) 工具层跑命令
   {
     const { tools } = makeTools();
-    const r = await tools.run('run_command', { command: 'echo 鲸倩测试' });
-    check('工具：白名单命令能跑并且中文不乱码', r.includes('鲸倩测试'), '返回：' + String(r).slice(0, 80));
+    // 用 node 打一行中文，而不是 cmd 的 echo：GitHub Actions 的 Windows runner 上
+    // cmd 切了 65001 之后 echo 中文仍然会非 0 退出（本地不复现），这条改成不依赖 cmd 代码页的写法，
+    // 要验的还是「白名单能跑 + 中文经 spawn/解码不乱」。
+    const oldPath = process.env.PATH;
+    process.env.PATH = path.dirname(process.execPath) + path.delimiter + (oldPath || '');
+    let r;
+    try {
+      r = await tools.run('run_command', { command: "node -e console.log('鲸倩测试')" });
+    } finally {
+      process.env.PATH = oldPath;
+    }
+    check('工具：白名单命令能跑并且中文不乱码', r.includes('鲸倩测试'), '返回：' + String(r));
   }
   {
     const { tools } = makeTools();
