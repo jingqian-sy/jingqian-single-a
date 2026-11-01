@@ -372,6 +372,7 @@ node evals-adaptive/run.js --run                           # 自适应选档跑�
 | `embedding` | 填了 key 并 `enabled: true` 才走向量召回 |
 | `tools` | 工作目录、命令白名单、超时、输出上限 |
 | `sandbox` | `none` / `process` / `docker`，默认 `none` |
+| `radar` | 免费模型雷达：定期看公开页面/公开模型接口，发现新的免费模型就在页面顶部提示一句（可关）；只提示，不自动写密钥、不自动启用。`sources` 留空就不跑，见 [docs/免费模型雷达.md](docs/免费模型雷达.md) |
 | `budget` | 单次调用 / 单轮 / 单任务的秒数与 token 上限（超了降级停下，不死等）|
 
 想一次配好几家？看 `config.multi-provider.example.json`：三家云端 + 本地，带 `quota` 字段。

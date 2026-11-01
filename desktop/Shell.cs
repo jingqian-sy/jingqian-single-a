@@ -558,6 +558,10 @@ namespace JingqianShell
         NotifyIcon tray;
         Label statsLabel;
         Label clockLabel;
+        Panel radarBar;
+        Label radarLabel;
+        Button radarGoBtn;
+        Button radarLaterBtn;
         ToolTip tip;
         int statTick;
         public bool VerifyOnly;
@@ -643,6 +647,7 @@ namespace JingqianShell
                         Activate();
                         if (input != null) { input.Select(); input.Focus(); }
                     }
+                    if (ok && !VerifyOnly) CheckRadar();
                     if (openSettings) OpenSettings();
                     if (!string.IsNullOrEmpty(AutoSendText))
                     {
@@ -742,6 +747,39 @@ namespace JingqianShell
             bTray.SetBounds(tx, Dpi.X(6), TextWidth("托盘"), Dpi.X(26));
             bTray.Click += delegate { HideToTray(); };
             toolbar.Controls.Add(bTray);
+
+            // 免费模型雷达提示条：平时藏着，发现新的免费模型才出现。
+            // 只提示，不自动写密钥、不自动启用；「以后再说」= 记为已读。
+            radarBar = new Panel();
+            radarBar.BackColor = Color.FromArgb(255, 250, 232);
+            radarBar.Visible = false;
+            radarBar.Paint += delegate (object s, PaintEventArgs e)
+            {
+                using (Pen p = new Pen(Theme.Border, 1f))
+                    e.Graphics.DrawRectangle(p, 0, 0, radarBar.Width - 1, radarBar.Height - 1);
+            };
+            radarLabel = new Label();
+            radarLabel.AutoSize = false;
+            radarLabel.TextAlign = ContentAlignment.MiddleLeft;
+            radarLabel.ForeColor = Theme.AccentDeep;
+            radarLabel.Font = Theme.Ui(9f, false);
+            radarLabel.SetBounds(Dpi.X(8), 0, Dpi.X(240), Dpi.X(26));
+            radarBar.Controls.Add(radarLabel);
+
+            radarGoBtn = MakeButton("去配置", Theme.Accent, Color.White);
+            radarGoBtn.SetBounds(0, 0, TextWidth("去配置"), Dpi.X(20));
+            radarGoBtn.Click += delegate { HideRadarBar(); OpenSettings(); };
+            radarBar.Controls.Add(radarGoBtn);
+
+            radarLaterBtn = MakeButton("以后再说", Color.White, Theme.AccentDeep);
+            radarLaterBtn.FlatAppearance.BorderColor = Theme.Border;
+            radarLaterBtn.FlatAppearance.BorderSize = 1;
+            radarLaterBtn.SetBounds(0, 0, TextWidth("以后再说"), Dpi.X(20));
+            radarLaterBtn.Click += delegate { HideRadarBar(); AckRadar(); };
+            radarBar.Controls.Add(radarLaterBtn);
+
+            toolbar.Controls.Add(radarBar);
+            toolbar.Resize += delegate { LayoutRadarBar(toolbar); };
             Controls.Add(toolbar);
 
             Panel bottom = new Panel();
@@ -844,6 +882,80 @@ namespace JingqianShell
         int TextWidth(string text)
         {
             return TextRenderer.MeasureText(text, Theme.Ui(9f, true)).Width + Dpi.X(22);
+        }
+
+        // ---------- 免费模型雷达提示条：布局 / 显隐 / 后台问一次 ----------
+        void LayoutRadarBar(Panel toolbar)
+        {
+            if (radarBar == null || toolbar == null || radarGoBtn == null || radarLaterBtn == null) return;
+            int w = Dpi.X(240) + Dpi.X(8) + radarGoBtn.Width + Dpi.X(6) + radarLaterBtn.Width + Dpi.X(8);
+            int x = Math.Max(Dpi.X(10), toolbar.Width - w - Dpi.X(10));
+            radarBar.SetBounds(x, Dpi.X(6), w, Dpi.X(26));
+            radarLabel.SetBounds(Dpi.X(8), 0, Dpi.X(240), Dpi.X(26));
+            radarGoBtn.SetBounds(Dpi.X(240) + Dpi.X(8), Dpi.X(3), radarGoBtn.Width, Dpi.X(20));
+            radarLaterBtn.SetBounds(radarGoBtn.Left + radarGoBtn.Width + Dpi.X(6), Dpi.X(3), radarLaterBtn.Width, Dpi.X(20));
+        }
+
+        void ShowRadarBar(int n, string sample)
+        {
+            if (radarBar == null) return;
+            // 字数控制在一条内：具体是哪几个模型，去设置页看（横条里不塞长名字）
+            radarLabel.Text = "发现 " + n + " 个新的免费模型，要现在配置吗？";
+            LayoutRadarBar(radarBar.Parent as Panel);
+            radarBar.Visible = true;
+            radarBar.BringToFront();
+        }
+
+        void HideRadarBar()
+        {
+            if (radarBar != null) radarBar.Visible = false;
+        }
+
+        // 只读服务里的缓存，不在 UI 线程里联网
+        void CheckRadar()
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate (object state)
+            {
+                int n = 0;
+                string sample = "";
+                try
+                {
+                    Dictionary<string, object> r = api.Get("/api/radar", 5000);
+                    object arr;
+                    if (r.TryGetValue("new", out arr) && arr is object[])
+                    {
+                        foreach (object o in (object[])arr)
+                        {
+                            Dictionary<string, object> d = o as Dictionary<string, object>;
+                            if (d == null) continue;
+                            n++;
+                            if (sample.Length == 0 && d.ContainsKey("model")) sample = Convert.ToString(d["model"]);
+                        }
+                    }
+                }
+                catch { return; }
+                if (n <= 0) return;
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate { ShowRadarBar(n, sample); });
+                }
+                catch { }
+            });
+        }
+
+        // 「以后再说」：让服务把这几条记成已读，下次不再提醒
+        void AckRadar()
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate (object state)
+            {
+                try
+                {
+                    Dictionary<string, object> body = new Dictionary<string, object>();
+                    body["all"] = true;
+                    api.Post("/api/radar/ack", body, 5000);
+                }
+                catch { }
+            });
         }
 
         void ShowStatus()

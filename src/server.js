@@ -11,6 +11,8 @@
  *   POST /api/consolidate  立刻整理一次记忆
  *   GET  /api/stats        账本 + 审计计数 + 记忆数
  *   GET  /api/audit?limit= 最近审计
+ *   GET  /api/radar        免费模型雷达：{ new: [...] }（只读缓存，不联网）
+ *   POST /api/radar/ack    { ids:[...] } 或 { all:true } → 记为已读
  *
  * 默认只听 127.0.0.1，别自己暴露到公网——这版没有登录鉴权。
  */
@@ -21,6 +23,7 @@ const { URL } = require('url');
 const { Her } = require('./core');
 const qq = require('./qq/adapter');
 const qqConnect = require('./qq/connect');
+const radar = require('./radar');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -107,6 +110,26 @@ async function handleApi(req, res, url) {
   }
 
   if (p === '/api/selfcheck') return json(res, 200, her.selfcheck());
+
+  // ---------- 免费模型雷达（只读缓存；扫描在后台定时跑，不在请求里联网） ----------
+  if (p === '/api/radar' && req.method === 'GET') {
+    const pd = radar.pending(her.dataDir, { cfg });
+    return json(res, 200, {
+      ok: true,
+      enabled: pd.enabled,
+      configured: pd.configured,
+      at: pd.updated_at,
+      new: pd.items
+    });
+  }
+
+  if (p === '/api/radar/ack' && req.method === 'POST') {
+    const body = await readBody(req);
+    const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+    if (body.all !== true && !ids.length) return json(res, 400, { ok: false, error: '要么给 ids 数组，要么 all:true' });
+    const r = radar.ack(her.dataDir, ids, body.all === true);
+    return json(res, 200, { ok: true, ack: r.acked, remaining: r.remaining });
+  }
 
   if (p === '/api/memory' && req.method === 'GET') {
     const q = url.searchParams.get('query');
@@ -375,6 +398,16 @@ server.listen(PORT, HOST, () => {
   if (sc.warnings.length) sc.warnings.forEach((w) => console.log('  ! ' + w));
   if (cfg._missing_config) console.log('  ! 没有 config.json，正在用 config.example.json 的默认值（run.cmd 会自动复制一份）');
   console.log('');
+  // 免费模型雷达：启动后 60 秒跑一次，之后每 7 天一次；没配 sources 就等于不跑
+  const radarJob = radar.startSchedule({
+    cfg,
+    dataDir: her.dataDir,
+    onNew: (r) => console.log('  · 雷达：发现 ' + r.new.length + ' 个新的免费模型（在设置里看）')
+  });
+  if (radarJob) {
+    console.log('  · 雷达：已排期（' + Math.round(radarJob.delay / 1000) + ' 秒后首次扫描，之后每 '
+      + Math.round(radarJob.every / 86400000) + ' 天）');
+  }
   her.startIdleConsolidate((cfg.memory && cfg.memory.idleConsolidateMinutes) || 60);
 });
 

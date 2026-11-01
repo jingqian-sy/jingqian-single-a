@@ -13,6 +13,8 @@
  *   5. 起 mock provider（本地假模型，无需密钥）
  *   6. 服务冒烟：真起 src/server.js，打 /api/chat
  *   7. 评测子集：m01 m02 t02 t08 r01 x01（跑两遍，机器判定）
+ *   …（8~17 见下面 main）
+ *  18. 免费模型雷达（evals/radar-test.js，本地假页面、不联网）
  *
  * 所有临时数据都写在 data/ci-run/ 和 evals/.run/ 下，覆盖不到你的真实记忆与成绩报表。
  */
@@ -221,6 +223,7 @@ async function main() {
     await stepAsync('17. QQ 一键连接（发现/连接/写配置/断开）', () => nodeAsync([
       path.join(__dirname, 'qq-connect-test.js')
     ], {}));
+    await stepAsync('18. 免费模型雷达（本地假页面：解析 / 去重 / 404 保留旧清单）', () => node([path.join(__dirname, 'radar-test.js')]));
 
     console.log('\n全部通过，用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
   } catch (e) {

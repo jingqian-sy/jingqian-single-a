@@ -25,9 +25,18 @@
   .hint { max-width:820px; margin:6px auto 0; color:var(--dim); font-size:12px; }
   .err { color:#a33; }
 .settingLink { margin-left:10px; font-size:13px; color:#2f6f6a; border:1px solid #cfe3dd; border-radius:6px; padding:2px 8px; text-decoration:none; }
+.radarBar { display:flex; align-items:center; gap:10px; padding:8px 18px; background:#fff8e1; border-bottom:1px solid #ecd9a0; font-size:13px; color:#6b5418; }
+.radarBar span.txt { flex:1; }
+.radarBar .radarBtn { font-size:12px; padding:4px 10px; border-radius:8px; border:1px solid #e0c670; background:#fff; color:#6b5418; text-decoration:none; cursor:pointer; }
+.radarBar .radarBtn.go { background:#2f6f6a; border-color:#2f6f6a; color:#fff; }
 </style>
 </head>
 <body>
+<div id="radarBar" class="radarBar" hidden>
+  <span class="txt" id="radarText"></span>
+  <a class="radarBtn go" id="radarGo" href="/console.html">去配置</a>
+  <button type="button" class="radarBtn" id="radarLater">以后再说</button>
+</div>
 <header>
   <h1>鲸倩 · 单A 雏版</h1>
   <a href="/console.html" class="settingLink">⚙ 设置</a>
@@ -110,6 +119,35 @@ async function selfcheck() {
   }
 }
 selfcheck();
+
+// ---------- 免费模型雷达：页面内一条横条，问要不要配置（不弹窗、不自动改密钥） ----------
+let radarIds = [];
+async function loadRadar() {
+  try {
+    const r = await fetch('/api/radar');
+    const j = await r.json();
+    if (!j.ok || !j.new || !j.new.length) return;
+    radarIds = j.new.map((x) => x.id);
+    const names = j.new.slice(0, 2).map((x) => x.model).join('、');
+    document.getElementById('radarText').textContent = '发现 ' + j.new.length + ' 个新的免费模型（'
+      + names + (j.new.length > 2 ? ' 等' : '') + '），要现在配置吗？';
+    const first = j.new[0];
+    document.getElementById('radarGo').href = '/console.html?radar=' + encodeURIComponent(first.model)
+      + '&provider=' + encodeURIComponent(first.provider || '');
+    document.getElementById('radarBar').hidden = false;
+  } catch (e) { }
+}
+document.getElementById('radarLater').onclick = async () => {
+  document.getElementById('radarBar').hidden = true;
+  try {
+    await fetch('/api/radar/ack', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: radarIds })
+    });
+  } catch (e) { }
+};
+loadRadar();
 
 // ---------- 通话模式：一直听着 / 能打断 / 有垫音 ----------
 const micBtn = document.getElementById('mic');

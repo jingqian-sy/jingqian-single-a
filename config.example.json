@@ -50,6 +50,19 @@
     { "provider": "zhipu", "url": "" }
   ],
   "quotaSourcesNote": "可选。填公开的额度说明页地址（不需要登录的那种），定期抓页面文本刷新对应 provider 的 freeQuota；url 留空或抓不到就保留旧值，不清空。不填就不刷新规则，只靠账本 + 探测。详见 docs/额度策略.md",
+  "radar": {
+    "enabled": true,
+    "delayMs": 60000,
+    "intervalMs": 604800000,
+    "sources": [
+      {
+        "name": "OpenRouter",
+        "url": "https://openrouter.ai/api/v1/models",
+        "type": "openrouter"
+      }
+    ],
+    "note": "免费模型雷达。按时抓 sources 里的公开页面，认出模型名，和已知清单比，新的只在软件版顶部横条提示你，不自动写密钥、不自动启用。type=openrouter 读它的公开模型接口（pricing 为 0 即免费）；不加 type 就按网页文本找「免费/free」附近的名字。抓不到只会记一条 warn，不清空旧清单。详见 docs/免费模型雷达.md"
+  },
   "memory": {
     "topK": 5,
     "maxHistory": 16,
