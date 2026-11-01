@@ -1706,11 +1706,15 @@ namespace JingqianShell
         TextBox txtUrl, txtPort, txtBase, txtModel, txtKey;
         ComboBox cmbTier, cmbSandbox;
         TextBox txtWhitelist, txtQQUrl, txtQQToken;
-        CheckBox chkMemory, chkQQAdvanced, chkShowKey;
+        CheckBox chkMemory, chkShowKey;
         Button btnQQFind, btnQQLink, btnQQUnlink, btnAdd, btnDel;
         Label lblQQStatus;
         Panel headerPanel, contentPanel, footerPanel;
-        FlatBtn btnSave, btnCancel, btnClose;
+        FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnRefreshStats, btnTestModel;
+        Label lblStatus, lblTestResult;
+        ComboBox cmbRouteMode;
+        TextBox txtRouteOrder, txtMaxSteps, txtTopK, txtMaxHistory;
+        CheckBox chkEscalate, chkAllowCommand;
         bool qqConnected;
         string qqGateway, qqToken;
         string qqNickname;
@@ -1767,6 +1771,12 @@ namespace JingqianShell
             btnClose.Click += delegate { Close(); };
             headerPanel.Controls.Add(btnClose);
 
+            // 中控台：跳到设置页最下面的运行状态 + 选路 + 记忆参数
+            btnConsole = new FlatBtn("中控台", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
+            btnConsole.Font = Theme.Ui(8.5f, true);
+            btnConsole.Click += delegate { ScrollToConsole(); };
+            headerPanel.Controls.Add(btnConsole);
+
             footerPanel = new Panel();
             footerPanel.Dock = DockStyle.Bottom;
             footerPanel.Height = Dpi.X(58);
@@ -1796,17 +1806,21 @@ namespace JingqianShell
             contentPanel.BringToFront();
 
             BuildUi();
-            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(790));
+            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(1220));
             LayoutChrome();
             LoadConfig();
             ApplyRound();
             Resize += delegate { LayoutChrome(); ApplyRound(); };
+            // 截图/验收用：JQ_CFG_SCROLL=1 打开设置时直接滚到中控台
+            if (Environment.GetEnvironmentVariable("JQ_CFG_SCROLL") == "1")
+                Shown += delegate { ScrollToConsole(); };
         }
 
         void LayoutChrome()
         {
             if (headerPanel == null) return;
             if (btnClose != null) btnClose.SetBounds(headerPanel.Width - Dpi.X(42), Dpi.X(8), Dpi.X(30), Dpi.X(30));
+            if (btnConsole != null) btnConsole.SetBounds(headerPanel.Width - Dpi.X(42) - Dpi.X(92), Dpi.X(9), Dpi.X(84), Dpi.X(28));
             if (btnSave != null)
             {
                 btnSave.SetBounds(footerPanel.Width - Dpi.X(216), Dpi.X(11), Dpi.X(96), Dpi.X(36));
@@ -1954,30 +1968,194 @@ namespace JingqianShell
             btnQQUnlink.Enabled = false;
             btnQQUnlink.Click += delegate { QQDisconnect(); };
 
-            chkQQAdvanced = new CheckBox();
-            chkQQAdvanced.Text = "高级（显示网关地址 / 令牌）";
-            chkQQAdvanced.Font = Theme.Ui(9f, false);
-            chkQQAdvanced.ForeColor = Theme.Text;
-            chkQQAdvanced.SetBounds(Dpi.X(14), Dpi.X(730), Dpi.X(300), Dpi.X(24));
-            chkQQAdvanced.AccessibleName = "cfgQQAdvanced";
-            chkQQAdvanced.CheckedChanged += delegate { ToggleQQAdvanced(); };
-            contentPanel.Controls.Add(chkQQAdvanced);
-
-            Cap("网关地址", 14, 764);
-            txtQQUrl = Box(14, 784, 380);
+            Cap("网关地址", 14, 730);
+            txtQQUrl = Box(14, 750, 380);
             txtQQUrl.AccessibleName = "cfgQQUrl";
-            Cap("令牌", 408, 764);
-            txtQQToken = Box(408, 784, 202);
+            Cap("令牌", 408, 730);
+            txtQQToken = Box(408, 750, 202);
             txtQQToken.PasswordChar = '*';
             txtQQToken.AccessibleName = "cfgQQToken";
-            txtQQUrl.Visible = false;
-            txtQQToken.Visible = false;
-            txtQQUrl.Tag = "adv";
-            txtQQToken.Tag = "adv";
 
-            Label advHint = Hint("没接网关时不用管它；网桥收到消息后调本机服务，再把回复发回 QQ。", 14, 818);
-            advHint.Tag = "adv";
-            advHint.Visible = false;
+            Hint("没接网关时不用管它；网桥收到消息后调本机服务，再把回复发回 QQ。", 14, 784);
+
+            // ---------- 中控台（运行状态 + 选路 + 记忆参数） ----------
+            Section("中控台", 14, 872);
+            lblStatus = new Label();
+            lblStatus.AutoSize = false;
+            lblStatus.Font = Theme.Ui(9f, false);
+            lblStatus.ForeColor = Theme.Text;
+            lblStatus.Text = "点「刷新状态」看这台机器现在的情况。";
+            lblStatus.SetBounds(Dpi.X(14), Dpi.X(902), Dpi.X(596), Dpi.X(44));
+            contentPanel.Controls.Add(lblStatus);
+
+            btnRefreshStats = SmallBtn("刷新状态", 14, 952, 92, true);
+            btnRefreshStats.Click += delegate { RefreshStats(); };
+            btnTestModel = SmallBtn("测当前模型", 112, 952, 100, false);
+            btnTestModel.Click += delegate { TestCurrentModel(); };
+
+            lblTestResult = new Label();
+            lblTestResult.AutoSize = false;
+            lblTestResult.Font = Theme.Ui(8.5f, false);
+            lblTestResult.ForeColor = Theme.Dim;
+            lblTestResult.Text = "";
+            lblTestResult.SetBounds(Dpi.X(224), Dpi.X(958), Dpi.X(386), Dpi.X(26));
+            contentPanel.Controls.Add(lblTestResult);
+
+            Cap("选路方式", 14, 996);
+            cmbRouteMode = new ComboBox();
+            cmbRouteMode.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbRouteMode.Font = Theme.Ui(9.5f, false);
+            cmbRouteMode.SetBounds(Dpi.X(14), Dpi.X(1016), Dpi.X(132), Dpi.X(26));
+            cmbRouteMode.Items.Add("cheap-first");
+            cmbRouteMode.Items.Add("fixed");
+            cmbRouteMode.Items.Add("cloud-first");
+            contentPanel.Controls.Add(cmbRouteMode);
+
+            Cap("最大步数", 158, 996);
+            txtMaxSteps = Box(158, 1016, 60);
+
+            chkEscalate = new CheckBox();
+            chkEscalate.Text = "拿不准时升到更贵的模型";
+            chkEscalate.Font = Theme.Ui(9f, false);
+            chkEscalate.ForeColor = Theme.Text;
+            chkEscalate.SetBounds(Dpi.X(236), Dpi.X(1020), Dpi.X(240), Dpi.X(24));
+            contentPanel.Controls.Add(chkEscalate);
+
+            Cap("提供方顺序（逗号分隔；留空 = 按上面列表顺序）", 14, 1056);
+            txtRouteOrder = Box(14, 1076, 596);
+
+            Cap("召回条数", 14, 1118);
+            txtTopK = Box(14, 1138, 80);
+            Cap("历史轮数", 120, 1118);
+            txtMaxHistory = Box(120, 1138, 80);
+
+            chkAllowCommand = new CheckBox();
+            chkAllowCommand.Text = "允许跑命令（只跑白名单里的）";
+            chkAllowCommand.Font = Theme.Ui(9f, false);
+            chkAllowCommand.ForeColor = Theme.Text;
+            chkAllowCommand.SetBounds(Dpi.X(216), Dpi.X(1142), Dpi.X(280), Dpi.X(24));
+            contentPanel.Controls.Add(chkAllowCommand);
+
+            Hint("改完点最下面「保存」；端口、模型、沙盒这些要重启服务才生效。", 14, 1178);
+        }
+
+        // 中控台：把运行状态拉下来拼成两行字（没连上就直说，不编）
+        void RefreshStats()
+        {
+            if (lblStatus == null) return;
+            try
+            {
+                Dictionary<string, object> sc = api.Get("/api/selfcheck", 4000);
+                Dictionary<string, object> st = api.Get("/api/stats", 5000);
+                object o;
+                int radarNew = 0;
+                try
+                {
+                    Dictionary<string, object> rd = api.Get("/api/radar", 3000);
+                    if (rd.TryGetValue("new", out o) && o is object[]) radarNew = ((object[])o).Length;
+                }
+                catch { }
+
+                string port = "?";
+                long uptime = 0;
+                int provReady = 0, provTotal = 0;
+                if (st.TryGetValue("server", out o) && o is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> sv = (Dictionary<string, object>)o;
+                    if (sv.ContainsKey("port")) port = Convert.ToString(sv["port"]);
+                    if (sv.ContainsKey("uptime_s")) uptime = Convert.ToInt64(sv["uptime_s"]);
+                }
+                if (st.TryGetValue("providers", out o) && o is object[])
+                {
+                    foreach (object x in (object[])o)
+                    {
+                        Dictionary<string, object> p = x as Dictionary<string, object>;
+                        if (p == null) continue;
+                        provTotal++;
+                        if (p.ContainsKey("ready") && Convert.ToBoolean(p["ready"])) provReady++;
+                    }
+                }
+                long calls = 0, toks = 0;
+                if (st.TryGetValue("ledger_today", out o) && o is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> lg = (Dictionary<string, object>)o;
+                    if (lg.ContainsKey("calls")) calls = Convert.ToInt64(lg["calls"]);
+                    long pt = lg.ContainsKey("prompt_tokens") ? Convert.ToInt64(lg["prompt_tokens"]) : 0;
+                    long ct = lg.ContainsKey("completion_tokens") ? Convert.ToInt64(lg["completion_tokens"]) : 0;
+                    toks = pt + ct;
+                }
+                long memCount = 0;
+                if (st.TryGetValue("memory", out o) && o is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> m = (Dictionary<string, object>)o;
+                    if (m.ContainsKey("count")) memCount = Convert.ToInt64(m["count"]);
+                }
+
+                string up = uptime >= 3600 ? (uptime / 3600) + " 小时 " + ((uptime % 3600) / 60) + " 分" : (uptime / 60) + " 分钟";
+                lblStatus.Text = "服务 127.0.0.1:" + port + " · 已跑 " + up + " · 模型 " + provReady + "/" + provTotal + " 就绪\n"
+                    + "今日 " + calls + " 次 · " + (toks / 1000.0).ToString("0.#") + "k tokens · 记忆 " + memCount + " 条 · 雷达待处理 " + radarNew + " 个";
+                lblStatus.ForeColor = Theme.Text;
+            }
+            catch (Exception ex)
+            {
+                lblStatus.Text = "连不上服务（" + api.BaseUrl + "）：" + ex.Message;
+                lblStatus.ForeColor = Theme.Warn;
+            }
+        }
+
+        void TestCurrentModel()
+        {
+            if (lblTestResult == null) return;
+            if (current < 0 || current >= providers.Count)
+            {
+                lblTestResult.Text = "先在上面选中一家模型";
+                lblTestResult.ForeColor = Theme.Warn;
+                return;
+            }
+            CommitCurrent(current);
+            Dictionary<string, object> p = providers[current];
+            Dictionary<string, object> body = new Dictionary<string, object>();
+            Dictionary<string, object> pr = new Dictionary<string, object>();
+            pr["name"] = Get(p, "name");
+            pr["base"] = Get(p, "base");
+            pr["model"] = Get(p, "model");
+            pr["key"] = txtKey.Text;
+            body["provider"] = pr;
+            btnTestModel.Enabled = false;
+            lblTestResult.ForeColor = Theme.Dim;
+            lblTestResult.Text = "正在测…";
+            Application.DoEvents();
+            try
+            {
+                Dictionary<string, object> r = api.Post("/api/config/test", body, 30000);
+                bool okNow = r.ContainsKey("ok") && Convert.ToBoolean(r["ok"]);
+                string ms = r.ContainsKey("ms") ? Convert.ToString(r["ms"]) + " ms" : "";
+                if (okNow)
+                {
+                    lblTestResult.Text = "通了（" + ms + "）";
+                    lblTestResult.ForeColor = Color.FromArgb(60, 150, 100);
+                }
+                else
+                {
+                    string err = r.ContainsKey("error") ? Convert.ToString(r["error"])
+                        : ("HTTP " + Convert.ToString(r.ContainsKey("status") ? r["status"] : "?"));
+                    lblTestResult.Text = "没通：" + err;
+                    lblTestResult.ForeColor = Theme.Warn;
+                }
+            }
+            catch (Exception ex)
+            {
+                lblTestResult.Text = "测失败：" + ex.Message;
+                lblTestResult.ForeColor = Theme.Warn;
+            }
+            finally { btnTestModel.Enabled = true; }
+        }
+
+        void ScrollToConsole()
+        {
+            if (contentPanel == null || lblStatus == null) return;
+            contentPanel.AutoScrollPosition = new Point(0, contentPanel.AutoScrollMinSize.Height);
+            contentPanel.Invalidate();
         }
 
         Label Section(string text, int x, int y)
@@ -2122,14 +2300,47 @@ namespace JingqianShell
                     }
                 }
                 txtWhitelist.Text = wl;
+                bool allowCmd = true;
+                if (cfg.TryGetValue("tools", out sub) && sub is Dictionary<string, object> && ((Dictionary<string, object>)sub).ContainsKey("allowCommand"))
+                    allowCmd = Convert.ToBoolean(((Dictionary<string, object>)sub)["allowCommand"]);
+                chkAllowCommand.Checked = allowCmd;
 
+                // 选路（中控台）
+                string routeMode = "cheap-first";
+                string routeOrder = "";
+                bool escalate = true;
+                int maxSteps = 12;
+                if (cfg.TryGetValue("route", out sub) && sub is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> rd = (Dictionary<string, object>)sub;
+                    if (rd.ContainsKey("mode")) routeMode = Convert.ToString(rd["mode"]);
+                    if (rd.ContainsKey("escalate")) escalate = Convert.ToBoolean(rd["escalate"]);
+                    if (rd.ContainsKey("maxSteps")) maxSteps = Convert.ToInt32(rd["maxSteps"]);
+                    object ord;
+                    if (rd.TryGetValue("order", out ord) && ord is object[])
+                    {
+                        List<string> xs = new List<string>();
+                        foreach (object o in (object[])ord) xs.Add(Convert.ToString(o));
+                        routeOrder = string.Join(",", xs.ToArray());
+                    }
+                }
+                cmbRouteMode.SelectedItem = (routeMode == "fixed" || routeMode == "cloud-first") ? routeMode : "cheap-first";
+                txtRouteOrder.Text = routeOrder;
+                chkEscalate.Checked = escalate;
+                txtMaxSteps.Text = Convert.ToString(maxSteps);
+
+                int topK = 5, maxHistory = 16;
                 bool autoCap = true;
                 if (cfg.TryGetValue("memory", out sub) && sub is Dictionary<string, object>)
                 {
                     Dictionary<string, object> md = (Dictionary<string, object>)sub;
                     if (md.ContainsKey("autoCapture")) autoCap = Convert.ToBoolean(md["autoCapture"]);
+                    if (md.ContainsKey("topK")) topK = Convert.ToInt32(md["topK"]);
+                    if (md.ContainsKey("maxHistory")) maxHistory = Convert.ToInt32(md["maxHistory"]);
                 }
                 chkMemory.Checked = autoCap;
+                txtTopK.Text = Convert.ToString(topK);
+                txtMaxHistory.Text = Convert.ToString(maxHistory);
 
                 qqConnected = false;
                 qqGateway = "";
@@ -2152,6 +2363,7 @@ namespace JingqianShell
                 txtQQUrl.Text = qqGateway;
                 txtQQToken.Text = qqToken;
                 UpdateQQState();
+                RefreshStats();
             }
             catch (Exception ex)
             {
@@ -2206,13 +2418,6 @@ namespace JingqianShell
                 btnQQLink.Enabled = qqGateway.Length > 0;
                 btnQQUnlink.Enabled = false;
             }
-        }
-
-        void ToggleQQAdvanced()
-        {
-            bool v = chkQQAdvanced.Checked;
-            foreach (Control c in contentPanel.Controls)
-                if ((c.Tag as string) == "adv") c.Visible = v;
         }
 
         void QQFind()
@@ -2322,10 +2527,29 @@ namespace JingqianShell
                 List<string> wl = new List<string>();
                 foreach (string x in txtWhitelist.Text.Split(',')) { if (x.Trim().Length > 0) wl.Add(x.Trim()); }
                 tb["commandWhitelist"] = wl;
+                tb["allowCommand"] = chkAllowCommand.Checked;
                 body["tools"] = tb;
                 Dictionary<string, object> mb = new Dictionary<string, object>();
                 mb["autoCapture"] = chkMemory.Checked;
+                int tk, mh;
+                if (int.TryParse(txtTopK.Text.Trim(), out tk) && tk > 0) mb["topK"] = tk;
+                if (int.TryParse(txtMaxHistory.Text.Trim(), out mh) && mh >= 0) mb["maxHistory"] = mh;
                 body["memory"] = mb;
+
+                // 中控台：选路（顺序留空就用现在列表的顺序）
+                Dictionary<string, object> rb = new Dictionary<string, object>();
+                rb["mode"] = Convert.ToString(cmbRouteMode.SelectedItem ?? "cheap-first");
+                rb["escalate"] = chkEscalate.Checked;
+                int ms;
+                if (int.TryParse(txtMaxSteps.Text.Trim(), out ms) && ms > 0) rb["maxSteps"] = ms;
+                List<string> order = new List<string>();
+                foreach (string x in txtRouteOrder.Text.Split(',')) { if (x.Trim().Length > 0) order.Add(x.Trim()); }
+                if (order.Count == 0)
+                {
+                    foreach (Dictionary<string, object> p in providers) order.Add(Get(p, "name"));
+                }
+                rb["order"] = order;
+                body["route"] = rb;
                 Dictionary<string, object> qb = new Dictionary<string, object>();
                 qb["enabled"] = qqConnected;
                 qb["gateway"] = (qqGateway.Length > 0 ? qqGateway : txtQQUrl.Text.Trim());

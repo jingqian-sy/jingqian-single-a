@@ -317,9 +317,10 @@ async function handleApi(req, res, url) {
         next.providers = body.providers.map((pr, i) => {
           const merged = Object.assign({}, pr);
           const raw = String(pr.key || '');
-          // 掩码（含 ****）就沿用原来的 key，别把真 key 覆盖掉
+          // 掩码（含 ****）就沿用原来的 key，别把真 key 覆盖掉；按名字找，删过一家也不会错位
           if (!raw || raw.includes('****')) {
-            merged.key = (old[i] && old[i].key) || '';
+            const prev = old.find((x) => x && x.name === pr.name) || old[i];
+            merged.key = (prev && prev.key) || '';
           }
           merged.enabled = pr.enabled !== false;
           return merged;
