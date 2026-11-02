@@ -120,10 +120,13 @@ async function recall(store, query, opts) {
       return {
         id: it.id, text: it.text, kind: it.kind, importance: it.importance,
         pinned: !!it.pinned, score: Math.round(x.score * 1000) / 1000,
+        tier: it.tier || 'cue',
         via: x.base > 0 ? (usedVector ? 'keyword+vector' : 'keyword') : (usedVector ? 'vector' : 'pinned')
       };
     })
-    .filter((h) => h.score > 0.05);
+    .filter((h) => h.score > 0.05)
+    // 分层：core/relation 平时就带上；cue（琐事、旧对话）只在问得很准的时候才想起来
+    .filter((h) => (opts.scope || 'first_round') === 'all' || h.tier !== 'cue' || h.score >= 0.6);
 
   if (hits.length) store.markUsed(hits.map((h) => h.id));
 

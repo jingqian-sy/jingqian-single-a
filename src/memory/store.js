@@ -24,6 +24,17 @@ class Store {
     ensureDir(dir);
     this.data = readJson(this.file, { version: 1, items: [] });
     if (!Array.isArray(this.data.items)) this.data.items = [];
+    // 老库补字段：归属和层级是后来加的（从记忆服务搬来的模式），没有就补上
+    let dirty = false;
+    for (const it of this.data.items) {
+      if (!it.person) { it.person = 'owner'; dirty = true; }
+      if (!it.tier) {
+        it.tier = (it.pinned || (Number(it.importance) || 1) >= 4) ? 'core'
+          : (it.kind === 'relation' ? 'relation' : 'cue');
+        dirty = true;
+      }
+    }
+    if (dirty) this.save();
   }
 
   save() { writeJson(this.file, this.data); }
@@ -33,6 +44,11 @@ class Store {
   count() { return this.active().length; }
 
   get(id) { return this.data.items.find((x) => x.id === id) || null; }
+
+  // 同一件事换个说法（「用户喜欢X」/「他喜欢X」）算冲突：只留说话人那条
+  subjectlessKey(t) {
+    return normalizeFact(String(t || '').replace(/^(用户|老爸|他的?|我的?|她)/, ''));
+  }
 
   add(input) {
     const text = String((input && input.text) || '').trim();
@@ -47,6 +63,23 @@ class Store {
       this.save();
       return dup;
     }
+    // 冲突检查：同义但主语不同，只留说「用户/老爸」那条
+    const sKey = this.subjectlessKey(text);
+    const conflict = this.data.items.find((x) => x.status !== 'archived' && this.subjectlessKey(x.text) === sKey);
+    const hisNow = /^(用户|老爸)/.test(text);
+    if (conflict && hisNow && !/^(用户|老爸)/.test(conflict.text)) {
+      conflict.status = 'archived';
+      conflict.merged_into = null;
+    } else if (conflict && !hisNow) {
+      conflict.updated_at = nowIso();
+      this.save();
+      return conflict;
+    }
+    const kindNow = KINDS.includes(input.kind) ? input.kind : 'fact';
+    // 层级：钉住/极重要 = 恒常注入（core）；关系类 = 恒常但轻一点；其余平时不注入，问到了才想起
+    const tier = input.tier || (input.pinned || (Number(input.importance) || 1) >= 4
+      ? 'core'
+      : (kindNow === 'relation' ? 'relation' : 'cue'));
     const item = {
       id: uid('mem'),
       text,
@@ -55,6 +88,8 @@ class Store {
       pinned: !!input.pinned,
       status: 'active',
       source: input.source || 'chat',
+      person: input.person || 'owner',
+      tier,
       created_at: nowIso(),
       updated_at: nowIso(),
       last_used_at: null,
