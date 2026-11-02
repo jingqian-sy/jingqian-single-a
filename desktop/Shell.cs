@@ -980,6 +980,7 @@ namespace JingqianShell
                         if (input != null) { input.Select(); input.Focus(); }
                     }
                     if (ok && !VerifyOnly && !DumpBubbles) CheckFirstRun();
+                    if (ok && !VerifyOnly && !DumpBubbles && TutorialFirstRun()) OpenTutorial(false);
                     if (ok && Environment.GetEnvironmentVariable("JQ_DEMO_SEQ") == "1") StartDemoSequence();
                     if (openSettings) OpenSettings();
                     if (!string.IsNullOrEmpty(AutoSendText))
@@ -1062,6 +1063,7 @@ namespace JingqianShell
             ToolBtn(toolPanel, ref tx, "状态", false, delegate { ShowStatus(); });
             ToolBtn(toolPanel, ref tx, "记忆", false, delegate { OpenMemory(); });
             ToolBtn(toolPanel, ref tx, "插件", false, delegate { OpenPlugins(); });
+            ToolBtn(toolPanel, ref tx, "上手", false, delegate { OpenTutorial(true); });
             ToolBtn(toolPanel, ref tx, "设置", true, delegate { OpenSettings(); });
             btnVoice = ToolBtn(toolPanel, ref tx, "朗读", false, delegate { ToggleVoice(); });
 
@@ -1546,8 +1548,8 @@ namespace JingqianShell
                 }
                 string pinned = (mode == "fixed" && order.Count > 0) ? order[0] : null;
 
-                RouteOption a1 = new RouteOption { Label = "自动：先免费 / 本地", Mode = "cheap-first", Current = pinned == null && mode == "cheap-first" };
-                RouteOption a2 = new RouteOption { Label = "自动：先云端", Mode = "cloud-first", Current = pinned == null && mode == "cloud-first" };
+                RouteOption a1 = new RouteOption { Label = "自动（该省省、该花花）", Mode = "cheap-first", Current = pinned == null && mode == "cheap-first" };
+                RouteOption a2 = new RouteOption { Label = "质量优先（先云端）", Mode = "cloud-first", Current = pinned == null && mode == "cloud-first" };
                 modelBox.Items.Add(a1);
                 modelBox.Items.Add(a2);
 
@@ -2261,6 +2263,35 @@ namespace JingqianShell
                 MessageBox.Show(this, "打开记忆失败：" + ex.Message, "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
+        // 上手教程：第一次打开自动弹一次，之后工具栏「上手」随时看
+        // 只有第一次（没有标记文件）才自动弹教程
+        bool TutorialFirstRun()
+        {
+            try
+            {
+                string marker = Path.Combine(Application.StartupPath, "tutorial-seen.txt");
+                if (File.Exists(marker)) return false;
+                try { File.WriteAllText(marker, DateTime.Now.ToString("yyyy-MM-dd HH:mm")); } catch { }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        public void OpenTutorial(bool manual)
+        {
+            try
+            {
+                using (TutorialForm f = new TutorialForm(manual))
+                {
+                    f.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "打开教程失败：" + ex.Message, "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
         public void OpenPlugins()
         {
             try
@@ -4162,6 +4193,22 @@ namespace JingqianShell
                 }
             }
             catch (Exception ex) { Console.WriteLine("PLUGINS SHOT FAIL " + ex.Message); }
+            try
+            {
+                using (TutorialForm tf = new TutorialForm(true))
+                {
+                    tf.StartPosition = FormStartPosition.Manual;
+                    tf.Location = new Point(-30000, -30000);
+                    tf.ShowInTaskbar = false;
+                    tf.Show();
+                    Application.DoEvents();
+                    Thread.Sleep(400);
+                    Application.DoEvents();
+                    Shot(tf, Path.Combine(repo, "data", "_ui_tutorial.png"));
+                    tf.Hide();
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("TUTORIAL SHOT FAIL " + ex.Message); }
             return 0;
         }
 
@@ -4248,6 +4295,79 @@ namespace JingqianShell
                 if (mode == "dump") return f.DumpCount > 0 ? 0 : 2;
             }
             return 0;
+        }
+    }
+
+    // ===================== 上手教程：四步，别写成长篇 =====================
+    class TutorialForm : Form
+    {
+        public TutorialForm(bool manual)
+        {
+            Text = "上手 · 鲸倩";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            ShowInTaskbar = false;
+            Font = Theme.Ui(9f, false);
+            BackColor = Theme.Paper;
+            ClientSize = new Size(Dpi.X(560), Dpi.X(520));
+            try { string ico = Path.Combine(Application.StartupPath, "icon.ico"); if (File.Exists(ico)) Icon = new Icon(ico); } catch { }
+
+            Label head = new Label();
+            head.Text = "上手四步";
+            head.Font = Theme.Ui(14f, true);
+            head.ForeColor = Theme.Text;
+            head.SetBounds(Dpi.X(22), Dpi.X(16), Dpi.X(400), Dpi.X(30));
+            Controls.Add(head);
+
+            Label sub = new Label();
+            sub.Text = "看完这四步就会用了。之后想再看，点工具栏的「上手」。";
+            sub.ForeColor = Theme.Dim;
+            sub.Font = Theme.Ui(8.5f, false);
+            sub.SetBounds(Dpi.X(22), Dpi.X(48), Dpi.X(516), Dpi.X(22));
+            Controls.Add(sub);
+
+            string body =
+                "一、先接一家模型\n"
+                + "设置 → 选一家「未填」的 → 「申请密钥」去拿 key → 粘到密钥框 → 测试连接 → 通了会弹出选模型，挑一个 → 保存。\n"
+                + "本机装了 Ollama 的话，不用花钱，选「本机」那家就行。\n\n"
+                + "二、直接聊\n"
+                + "输入框说话，回车发送。要它做事就直说（「记一下我周三打球」「在工作目录建个 a.txt 写 hello」）。\n"
+                + "它调用工具时会在消息区留一条灰色小条，能看见它做了什么。\n\n"
+                + "三、换模型、看花费\n"
+                + "工具栏右边那个下拉：自动（该省省、该花花）/ 质量优先 / 指定某一家，点了立刻生效。\n"
+                + "旁边的「今日 ¥0.000」点开是账单，有按家明细和一个重置。\n\n"
+                + "四、进阶\n"
+                + "文件、图片直接拖进窗口；工具栏「记忆」能搜/删记忆；「插件」可以装小功能；\n"
+                + "「朗读」让它念出来，输入框右边「说话」可以语音输入。\n\n"
+                + "出问题先看这两处：消息区的灰色小条（做了什么）、工具栏「状态」（服务还在不在）。";
+
+            TextBox text = new TextBox();
+            text.Multiline = true;
+            text.ReadOnly = true;
+            text.ScrollBars = ScrollBars.Vertical;
+            text.BorderStyle = BorderStyle.FixedSingle;
+            text.BackColor = Color.White;
+            text.Font = Theme.Ui(9.5f, false);
+            text.Text = body.Replace("\n", "\r\n");
+            text.TabStop = false;
+            text.Select(0, 0);
+            text.SetBounds(Dpi.X(22), Dpi.X(78), Dpi.X(516), Dpi.X(378));
+            Controls.Add(text);
+
+            FlatBtn ok = new FlatBtn("知道了", Theme.Accent, Color.White);
+            ok.Font = Theme.Ui(9.5f, true);
+            ok.SetBounds(Dpi.X(560 - 22 - 110), Dpi.X(468), Dpi.X(110), Dpi.X(34));
+            ok.Click += delegate { Close(); };
+            Controls.Add(ok);
+
+            Label tip = new Label();
+            tip.Text = "教程随时能再看，不用记。";
+            tip.ForeColor = Theme.Dim;
+            tip.Font = Theme.Ui(8f, false);
+            tip.SetBounds(Dpi.X(22), Dpi.X(472), Dpi.X(300), Dpi.X(22));
+            Controls.Add(tip);
         }
     }
 

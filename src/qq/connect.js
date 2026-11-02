@@ -13,7 +13,20 @@ const path = require('path');
 const { readCfg } = require('./adapter');
 const { appendJsonl, nowIso } = require('../util');
 
-const CANDIDATES = [3000, 5700, 6700, 8080, 18080, 18700];
+const CANDIDATES = [3000, 3100, 5700, 6700, 8080, 18080, 18700, 3001, 3002];
+
+function lastFile(dataDir) { return path.join(dataDir, 'qq-last.json'); }
+
+function readLast(dataDir) {
+  try {
+    const j = JSON.parse(fs.readFileSync(lastFile(dataDir), 'utf8'));
+    return (j && j.gateway) ? j : null;
+  } catch (e) { return null; }
+}
+
+function saveLast(dataDir, gateway, token) {
+  try { fs.writeFileSync(lastFile(dataDir), JSON.stringify({ gateway, token, at: nowIso() }, null, 2), 'utf8'); } catch (e) {}
+}
 
 function logLine(dataDir, entry) {
   try { appendJsonl(path.join(dataDir, 'qq.log'), Object.assign({ ts: nowIso() }, entry)); } catch (e) {}
@@ -55,11 +68,21 @@ async function discover(cfg, dataDir) {
   const tokens = [];
   if (q.token) tokens.push(q.token);
   tokens.push('');
-  for (const port of CANDIDATES) {
+  // 上次连通过的那一个先试：一次连通之后就不用每次全扫一遍
+  const last = readLast(dataDir);
+  const ports = [];
+  if (last && last.gateway) {
+    const m = String(last.gateway).match(/:(\d+)\/?$/);
+    if (m) ports.push(Number(m[1]));
+    if (last.token && tokens.indexOf(last.token) < 0) tokens.unshift(last.token);
+  }
+  for (const p of CANDIDATES) if (ports.indexOf(p) < 0) ports.push(p);
+  for (const port of ports) {
     const gw = 'http://127.0.0.1:' + port;
     for (const tk of tokens) {
       const r = await probe(gw, tk);
       if (r.ok) {
+        saveLast(dataDir, gw, tk);
         logLine(dataDir, { dir: 'discover', ok: true, peer: gw, digest: r.nickname });
         return {
           found: true, gateway: gw, token: tk, tokenMasked: mask(tk),
@@ -72,9 +95,10 @@ async function discover(cfg, dataDir) {
   return {
     found: false,
     hints: [
-      '没在本机找到 QQ 桥接（常见端口都试过了）',
-      '装一个 OneBot 类网关（SnowLuma / NapCat 之类），启动它的 HTTP 服务',
-      '装好点「重新检测」；也可以在「高级」里手动填地址和令牌'
+      '没在本机找到能用的 QQ 桥接（常见端口都试过了：' + CANDIDATES.join(' / ') + '）',
+      '它得是 OneBot HTTP 形态（NapCat、LLOneBot 这类），把 HTTP 服务开起来再点「重新检测」',
+      'SnowLuma 只有一个自有接口的话连不上——在它里面开 HTTP 服务，或换一个 OneBot 实现',
+      '急着连的话，在「高级」里手填地址（例如 http://127.0.0.1:3000）和令牌'
     ]
   };
 }
@@ -104,6 +128,7 @@ async function connect(opts) {
   const saved = writeQQ(cfgFile, (q) => Object.assign(q, {
     enabled: true, gateway, token: token || '', self_id: r.selfId || q.self_id || ''
   }));
+  saveLast(dataDir, gateway, token || '');
   if (cfg) cfg.qq = saved;
   logLine(dataDir, { dir: 'connect', ok: true, peer: r.nickname, digest: r.selfId });
   return { ok: true, enabled: true, nickname: r.nickname || nickname || 'QQ 桥接', selfId: r.selfId || selfId, gateway };

@@ -29,6 +29,24 @@ function dayKey() {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
+// 全挂的时候说人话：别把一串 HTTP 400 甩给用户
+function explainFailures(tried) {
+  const list = Array.isArray(tried) ? tried : [];
+  const errs = list.map((t) => String(t.error || ''));
+  const names = list.map((t) => t.provider).filter(Boolean).join('、') || '所有模型';
+  const hit = (re) => errs.some((e) => re.test(e));
+  if (hit(/401|403|unauthor|invalid.*key|鉴权|no permission/i)) {
+    return '几家都说 key 不对或没权限（' + names + '）。去设置里核对密钥，或者先换一家能用的。';
+  }
+  if (hit(/429|quota|rate.?limit|额度|频率|余额/i)) {
+    return '几家都说额度或频率用完了（' + names + '）。等一会儿再试，或者在设置里换一家。';
+  }
+  if (hit(/timeout|ECONN|fetch failed|ENOTFOUND|网络|abort/i)) {
+    return '几家都连不上（' + names + '）。看一下网络，或者本机 Ollama 起来没有。';
+  }
+  return '几家都失败了（' + names + '）。' + (errs[0] ? '第一家的说法：' + errs[0] : '');
+}
+
 class Router {
   constructor(cfg, dataDir) {
     this.cfg = cfg || {};
@@ -40,6 +58,9 @@ class Router {
     ensureDir(this.dir);
     this.last = { provider: '', prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost: 0, calls: 0, cache_rate: null };
     this.lastQuota = null; // 最近一次额度闸门的结果，方便控制台/排查看
+    // 失败冷却：刚挂过的家 60 秒内排到最后，别每句话都先等它超时
+    this.failUntil = {};
+    this.cooldownMs = 60000;
   }
 
   // 选路前的额度闸门：free 档先按本地账本算剩余，再做一次探测（10 分钟内复用缓存）；
@@ -111,8 +132,13 @@ class Router {
     return !!(p.key && String(p.key).trim() && String(p.key).indexOf('YOUR_') !== 0 && String(p.key) !== 'sk-xxx');
   }
 
-  candidates(taskText) {
+  candidates(taskText, opts) {
+    opts = opts || {};
+    const now = Date.now();
     let list = this.providers.filter((p) => this.ready(p));
+    // 这一轮要用工具：声明了 tools:false 的家不硬塞（塞了它会答非所问或直接 400）
+    if (opts.needTools) list = list.filter((p) => p.tools !== false);
+    if (opts.skipLocal) list = list.filter((p) => p.tier !== 'local');
     if (!list.length) return [];
     const mode = this.route.mode || 'cheap-first';
     const price = (p) => (Number(p.price_in) || 0) * 1 + (Number(p.price_out) || 0);
@@ -125,15 +151,39 @@ class Router {
     } else {
       list.sort((a, b) => (a.tier === 'local' ? 0 : 1) - (b.tier === 'local' ? 0 : 1) || price(a) - price(b));
     }
-    const hard = this.route.escalate !== false && (
-      String(taskText || '').length > 220 || HARD_WORDS.test(String(taskText || ''))
+    // 升级只在「自动先免费/本地」时做。fix 是用户亲手点的那一家，别自作主张改；
+    // 「先云端」本来就在云端，也不需要再升。
+    const hard = mode === 'cheap-first' && this.route.escalate !== false && (
+      String(taskText || '').length > 220 ||
+      Number(opts.contextChars || 0) > 12000 ||
+      HARD_WORDS.test(String(taskText || ''))
     );
     if (hard) {
       const cloud = list.filter((p) => p.tier !== 'local');
       const local = list.filter((p) => p.tier === 'local');
       list = cloud.concat(local);
     }
-    return list;
+    // 这个会话上一轮是谁答的：这轮还轮得到它就排回最前，别聊着聊着换了个人
+    if (opts.prefer) {
+      const i = list.findIndex((p) => p.name === opts.prefer);
+      if (i > 0) list = [list[i]].concat(list.slice(0, i), list.slice(i + 1));
+    }
+    // 刚失败的家排到最后（不是删掉：万一只剩它，还得靠它）
+    const alive = [], cooling = [];
+    for (const p of list) {
+      if ((this.failUntil[p.name] || 0) > now) cooling.push(p); else alive.push(p);
+    }
+    return alive.concat(cooling);
+  }
+
+  markFail(p) {
+    if (!p || !p.name) return;
+    this.failUntil[p.name] = Date.now() + this.cooldownMs;
+  }
+
+  markOk(p) {
+    if (!p || !p.name) return;
+    delete this.failUntil[p.name];
   }
 
   noteUsage(p, usage) {
@@ -170,7 +220,11 @@ class Router {
 
   async call(messages, tools, opts) {
     opts = opts || {};
-    let list = this.candidates(opts.taskText || '');
+    let list = this.candidates(opts.taskText || '', {
+      needTools: !!(tools && tools.length),
+      contextChars: opts.contextChars,
+      prefer: opts.prefer
+    });
     // 带图片的这轮只找声明了 vision 的提供方，别的家不硬塞（塞了也是 400）
     if (opts.requireVision) list = list.filter((p) => p.vision);
     if (!list.length) {
@@ -208,21 +262,24 @@ class Router {
           const txt = (await r.text()).slice(0, 200);
           lastErr = p.name + ' HTTP ' + r.status + ' ' + txt;
           tried.push({ provider: p.name, ok: false, error: lastErr, ms: Date.now() - t0 });
+          this.markFail(p);
           this.routeLog('失败切换', { provider: p.name, error: lastErr });
           continue;
         }
         const j = await r.json();
         const stat = this.noteUsage(p, j.usage);
+        this.markOk(p);
         if (i > 0) this.routeLog('回退成功', { to: p.name, from: tried.map((x) => x.provider) });
         tried.push({ provider: p.name, ok: true, ms: Date.now() - t0 });
         return { json: j, provider: p, stat, tried, elapsed_ms: Date.now() - t0 };
       } catch (e) {
         lastErr = p.name + ' ' + e.message;
         tried.push({ provider: p.name, ok: false, error: lastErr, ms: Date.now() - t0 });
+        this.markFail(p);
         this.routeLog('异常切换', { provider: p.name, error: e.message });
       }
     }
-    const err = new Error('所有模型都失败了：' + lastErr);
+    const err = new Error(explainFailures(tried));
     err.code = 'ALL_FAILED';
     err.tried = tried;
     throw err;

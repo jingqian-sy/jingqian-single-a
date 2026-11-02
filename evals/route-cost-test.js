@@ -88,6 +88,33 @@ const post = (p, body) => fetch(base + p, {
 (async () => {
   seed();
   fake = await startFakeProvider();
+
+  // ---- 选路逻辑本身（不起服务）：固定模式不被升级打乱、失败的家会被冷落 ----
+  {
+    const { Router } = require('../src/router');
+    const r = new Router({
+      providers: [
+        { name: '本机', base: 'http://127.0.0.1:9/v1/chat/completions', model: 'l', tier: 'local', price_in: 0, price_out: 0 },
+        { name: '云', base: 'http://127.0.0.1:9/v1/chat/completions', model: 'c', tier: 'cloud', price_in: 1, price_out: 1, key: 'k' }
+      ],
+      route: { mode: 'fixed', order: ['本机', '云'], escalate: true }
+    }, path.join(TMP, 'unit-data'));
+    const hard = '帮我分析一下这个架构该怎么设计，为什么这么选，写一段对比';
+    const fixedList = r.candidates(hard);
+    ok('固定模式不被「难活升级」打乱', fixedList[0].name === '本机', fixedList.map((x) => x.name));
+
+    r.setRoute({ mode: 'cheap-first' });
+    const cheapHard = r.candidates(hard);
+    ok('自动模式下难活先云端', cheapHard[0].name === '云', cheapHard.map((x) => x.name));
+    const cheapEasy = r.candidates('嗯');
+    ok('自动模式下闲话先本机', cheapEasy[0].name === '本机', cheapEasy.map((x) => x.name));
+
+    r.markFail(cheapEasy[0]);
+    const afterFail = r.candidates('嗯');
+    ok('刚失败的家排到最后（不删）', afterFail[0].name === '云' && afterFail.length === 2, afterFail.map((x) => x.name));
+    r.failUntil = {};
+  }
+
   const srv = spawn(process.execPath, [path.join(ROOT, 'src', 'server.js')], {
     cwd: ROOT,
     stdio: 'ignore',

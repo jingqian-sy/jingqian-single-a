@@ -86,6 +86,8 @@ class Her {
       ? path.resolve(this.root, process.env.JQ_CONFIG)
       : path.join(this.root, 'config.json');
     this.tools.ctx.subAgent = (task, model) => this.runSubAgent(task, model);
+    // 这个会话上一轮是谁答的：下一轮尽量还找他，别聊着聊着换了个人
+    this.sessionProvider = {};
     // 插件模组：只加载 config.plugins.enabled 里明确开着的；单个插件坏了不影响主程序
     this.plugins = new PluginHost({
       dataDir: this.dataDir,
@@ -351,6 +353,7 @@ class Her {
     }
 
     let usedTools = [];
+    let retriedCloud = false;
     const trace = [];
     let totalPrompt = 0, totalCompletion = 0, cost = 0;
     let provider = '';
@@ -362,14 +365,24 @@ class Her {
       if (Date.now() - started > maxSeconds) { lastText = '（这条太绕了，我先停一下，超了这轮的时间上限。）'; break; }
       if (totalPrompt + totalCompletion > maxTokens) { lastText = '（token 预算用完了，我先停一下。）'; break; }
 
+      const ctxChars = messages.reduce(function (n, m) {
+        const c = m && m.content;
+        if (typeof c === 'string') return n + c.length;
+        if (Array.isArray(c)) return n + c.reduce(function (k, x) { return k + String((x && x.text) || '').length; }, 0);
+        return n;
+      }, 0);
+      const callOpts = {
+        taskText: text,
+        contextChars: ctxChars,
+        prefer: this.sessionProvider[sessionId],
+        skipLocal: retriedCloud,
+        requireVision: images.length > 0,
+        temperature: this.cfg.temperature == null ? 0.7 : this.cfg.temperature,
+        timeoutMs: ((this.cfg.budget && this.cfg.budget.perCallSeconds) || 120) * 1000
+      };
       let res;
       try {
-        res = await this.router.call(messages, this.toolsForStep(step, text), {
-          taskText: text,
-          requireVision: images.length > 0,
-          temperature: this.cfg.temperature == null ? 0.7 : this.cfg.temperature,
-          timeoutMs: (this.cfg.budget && this.cfg.budget.perCallSeconds || 120) * 1000
-        });
+        res = await this.router.call(messages, this.toolsForStep(step, text), callOpts);
       } catch (e) {
         if (e.code === 'NO_VISION') {
           const names = images.map((x) => x.name).join('、');
@@ -381,7 +394,23 @@ class Her {
         }
         throw e;
       }
+      // 本地模型偶尔会「空着回来」（没说话、也没调工具）：换云端补一次，别把空白甩给人
+      const probeMsg = (res.json.choices && res.json.choices[0] && res.json.choices[0].message) || {};
+      if (!retriedCloud && res.provider.tier === 'local'
+        && !(probeMsg.tool_calls && probeMsg.tool_calls.length) && !String(probeMsg.content || '').trim()) {
+        retriedCloud = true;
+        totalPrompt += res.stat.prompt_tokens;
+        totalCompletion += res.stat.completion_tokens;
+        cost += res.stat.cost;
+        try {
+          const cloudOpts = Object.assign({}, callOpts, { skipLocal: true, prefer: '' });
+          res = await this.router.call(messages, this.toolsForStep(step, text), cloudOpts);
+        } catch (e) {
+          this.sessionProvider[sessionId] = '';
+        }
+      }
       provider = res.provider.name;
+      this.sessionProvider[sessionId] = provider;
       totalPrompt += res.stat.prompt_tokens;
       totalCompletion += res.stat.completion_tokens;
       cost += res.stat.cost;
