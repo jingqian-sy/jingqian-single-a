@@ -73,6 +73,13 @@ function toUserFact(text) {
 
 const CAPTURE = /记住|别忘|记一下|我叫|我的名字|我喜欢|我讨厌|我不喜欢|生日是|我的生日|约定|以后都|从现在开始/;
 
+// 这活儿像不像要分几步做（决定要不要先出计划）
+function looksMultiStep(text) {
+  const t = String(text || '');
+  if (t.length > 60) return true;
+  return /分析|设计|架构|方案|规划|对比|排查|重构|部署|评测|实现|做一[个套]|写一[个段]|先.*再.*然后/.test(t);
+}
+
 // 他在问关于他自己的事吗（这类问句小模型最容易答成它自己）
 // 注意：得是「问」才算。「记住：我喜欢…」是在告诉我事，不能当成问句。
 function askingAboutHimself(text) {
@@ -419,6 +426,24 @@ class Her {
 
     let usedTools = [];
     let retriedCloud = false;
+    this._selfFix = false;
+    this._selfFix2 = false;
+    let planText = '';
+    // 看着像多步活：先让她说个三五步的计划，后面照着走，别边想边做跑偏
+    if (looksMultiStep(text) && !images.length) {
+      try {
+        const pr = await this.router.call(
+          messages.concat([{ role: 'user', content: '先用三到五句说清楚你准备怎么做：一句一步，不要调用工具，不要客套。' }]),
+          [],
+          { taskText: '先出计划', temperature: 0.3, maxTokens: 300, timeoutMs: 45000 }
+        );
+        const pc = String((pr.json.choices && pr.json.choices[0] && pr.json.choices[0].message && pr.json.choices[0].message.content) || '').trim();
+        if (pc) {
+          planText = pc.slice(0, 400);
+          messages.push({ role: 'assistant', content: '我的做法：\n' + planText });
+        }
+      } catch (e) { /* 出计划失败就照常干，不挡主线 */ }
+    }
     const trace = [];
     let totalPrompt = 0, totalCompletion = 0, cost = 0;
     let provider = '';
@@ -528,6 +553,14 @@ class Her {
           continue;
         }
       }
+      // 反向自洽：工具其实失败了/要确认，她却说「做好了」→ 让她按真实结果改一次
+      const claimsDone = /(做好了|完成了|搞定了|已经(做好|完成|建好|写好))/.test(lastText);
+      const toolFailed = trace.some((t) => /出错|失败|不存在|拒绝|拦|需要你明确点头|不在白名单/.test(String(t.result || '')));
+      if (claimsDone && toolFailed && !this._selfFix2 && step < maxSteps - 1) {
+        messages.push({ role: 'user', content: '（有工具返回的是失败或需要确认，别报「做好了」。按真实结果修正，或者把卡在哪一步说清楚。）' });
+        this._selfFix2 = true;
+        continue;
+      }
       break;
     }
     this._selfFix = false;
@@ -565,7 +598,8 @@ class Her {
       tools: usedTools,
       memory_used: recallRes.hits.length,
       memory_vector: recallRes.used_vector,
-      captured: captured ? captured.id : null
+      captured: captured ? captured.id : null,
+      plan: planText || ''
     };
     appendJsonl(path.join(this.dataDir, 'turns.log'), Object.assign({ ts: nowIso(), session: sessionId, text: truncate(text, 200) }, stats));
     return { reply, stats, memory: recallRes.hits, trace };

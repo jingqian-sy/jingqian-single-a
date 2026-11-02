@@ -250,33 +250,49 @@ class Router {
       const body = { model: p.model, messages, temperature: opts.temperature == null ? 0.7 : opts.temperature };
       if (tools && tools.length) { body.tools = tools; body.tool_choice = 'auto'; }
       if (opts.maxTokens) body.max_tokens = opts.maxTokens;
-      const t0 = Date.now();
-      try {
-        const r = await fetch(p.base, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (p.key || 'local') },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(Number(opts.timeoutMs) || 120000)
-        });
-        if (!r.ok) {
-          const txt = (await r.text()).slice(0, 200);
-          lastErr = p.name + ' HTTP ' + r.status + ' ' + txt;
+      // 同一家先试两次：限流/超时/5xx 这类说不定一次就好，别急着换家
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const t0 = Date.now();
+        try {
+          const r = await fetch(p.base, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: 'Bearer ' + (p.key || 'local') },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(Number(opts.timeoutMs) || 120000)
+          });
+          if (!r.ok) {
+            const txt = (await r.text()).slice(0, 200);
+            lastErr = p.name + ' HTTP ' + r.status + ' ' + txt;
+            const retriable = r.status === 429 || r.status >= 500;
+            if (retriable && attempt === 0) {
+              this.routeLog('同家重试', { provider: p.name, status: r.status });
+              await new Promise((res) => setTimeout(res, 800));
+              continue;
+            }
+            tried.push({ provider: p.name, ok: false, error: lastErr, ms: Date.now() - t0 });
+            this.markFail(p);
+            this.routeLog('失败切换', { provider: p.name, error: lastErr });
+            break;
+          }
+          const j = await r.json();
+          const stat = this.noteUsage(p, j.usage);
+          this.markOk(p);
+          if (i > 0) this.routeLog('回退成功', { to: p.name, from: tried.map((x) => x.provider) });
+          tried.push({ provider: p.name, ok: true, ms: Date.now() - t0 });
+          return { json: j, provider: p, stat, tried, elapsed_ms: Date.now() - t0 };
+        } catch (e) {
+          lastErr = p.name + ' ' + e.message;
+          const retriable = /timeout|aborted|ECONN|fetch failed|socket/i.test(String(e.message || ''));
+          if (retriable && attempt === 0) {
+            this.routeLog('同家重试', { provider: p.name, error: e.message });
+            await new Promise((res) => setTimeout(res, 500));
+            continue;
+          }
           tried.push({ provider: p.name, ok: false, error: lastErr, ms: Date.now() - t0 });
           this.markFail(p);
-          this.routeLog('失败切换', { provider: p.name, error: lastErr });
-          continue;
+          this.routeLog('异常切换', { provider: p.name, error: e.message });
+          break;
         }
-        const j = await r.json();
-        const stat = this.noteUsage(p, j.usage);
-        this.markOk(p);
-        if (i > 0) this.routeLog('回退成功', { to: p.name, from: tried.map((x) => x.provider) });
-        tried.push({ provider: p.name, ok: true, ms: Date.now() - t0 });
-        return { json: j, provider: p, stat, tried, elapsed_ms: Date.now() - t0 };
-      } catch (e) {
-        lastErr = p.name + ' ' + e.message;
-        tried.push({ provider: p.name, ok: false, error: lastErr, ms: Date.now() - t0 });
-        this.markFail(p);
-        this.routeLog('异常切换', { provider: p.name, error: e.message });
       }
     }
     const err = new Error(explainFailures(tried));
