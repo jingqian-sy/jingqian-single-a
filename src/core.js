@@ -17,7 +17,7 @@ const path = require('path');
 const { Router } = require('./router');
 const { Store } = require('./memory/store');
 const { EventLayer } = require('./memory/event');
-const { recall, forPrompt } = require('./memory/retrieve');
+const { recall, forPrompt, kindOf } = require('./memory/retrieve');
 const { consolidate } = require('./memory/consolidate');
 const { Tools } = require('./tools');
 const { PluginHost } = require('./plugins');
@@ -34,6 +34,8 @@ const DEFAULT_PERSONA = [
   '不知道的事就说不确定，不许编文件内容、不许编数字。',
   '人称要清楚：他说「我」指的是他自己，你回他用「你」；只有你自己的事才用「我」。',
   '他打「我喜欢什么」是在说他自己；问「你知道我喜欢什么吗」是考你记不记得他的事，不是问你自己喜欢什么。',
+  '他问关于他自己的事（名字、喜好、生日、习惯、住哪）时，先用记忆里关于他的那些回答；没记着就说没记着，'
+    + '千万别拿你自己的名字、喜好或身份顶上去（不许把「我叫鲸倩」当成在回答「我叫什么」）。',
   '「你」永远指他，不是指你自己；说自己的时候才用「我」，比如「我记着」「我看看」。',
   '记忆里写成「用户」「老爸」的，全部指他；跟他说话永远只准用「你」，不许对他说「用户」这两个字。',
   '别把他说的事说成你自己的（他说他爱喝冰美式，你就说「你爱喝」，不许说「我刚喝了一杯」）。'
@@ -52,6 +54,16 @@ function toUserFact(text) {
 }
 
 const CAPTURE = /记住|别忘|记一下|我叫|我的名字|我喜欢|我讨厌|我不喜欢|生日是|我的生日|约定|以后都|从现在开始/;
+
+// 他在问关于他自己的事吗（这类问句小模型最容易答成它自己）
+function askingAboutHimself(text) {
+  const t = String(text || '').trim();
+  return /^(我(叫|的名字|是谁|几岁|住哪)|我(叫什么名字|的名字是什么))/.test(t)
+    || /我(叫什么|的名字|是谁|生日|几岁)/.test(t)
+    || /我(喜欢|爱|讨厌|爱吃|爱喝|不吃|不喝)(什么|啥|哪些)?/.test(t)
+    || /^你知道我/.test(t)
+    || /^你(还)?记得我/.test(t);
+}
 
 const READONLY_TOOLS = ['read_file', 'list_dir', 'recall', 'event_timeline'];
 
@@ -243,15 +255,21 @@ class Her {
     const sum = this.loadSummary(this._curSession);
     if (sum) parts.push('【之前聊到的】\n' + forPrompt(sum));
     if (recallRes.block) {
-      parts.push('【参考记忆】（下面这些里的「他」就是跟你说话的那个人，都是他的事；'
-        + '别把这些事说成你自己的。回他的时候用「你」称呼他，别对他说「用户」两个字）\n' + recallRes.block);
+      parts.push('【参考记忆】（下面分两段：「关于他的事实」里的「他」就是跟你说话的那个人；'
+        + '「回忆片段」是你俩之间发生过的话和情绪，不是关于他的事实，别照搬。'
+        + '回他的时候用「你」称呼他，别对他说「用户」两个字，也别把他的事说成你自己的）\n' + recallRes.block);
     }
     const ev = this.events.block(5);
     if (ev) parts.push('【事件时间轴】\n' + forPrompt(ev));
     const userContent = parts.length ? parts.join('\n\n') + '\n\n【这次的话】\n' + userText : userText;
+    // 小模型最容易在这一类问句上翻车（把「我」当成它自己）。
+    // 光写系统规则它记不住，就在问题前面直接点一句。
+    const asked = askingAboutHimself(userText)
+      ? '（他这句话是在问他自己：用记忆里关于他的事回答，称呼他用「你」；不许用你自己的名字、喜好或身份来顶）\n'
+      : '';
     return [{ role: 'system', content: this.cfg.persona || DEFAULT_PERSONA }]
       .concat(history.messages)
-      .concat([{ role: 'user', content: userContent }]);
+      .concat([{ role: 'user', content: asked + userContent }]);
   }
 
   capture(userText) {
@@ -352,6 +370,13 @@ class Her {
     let history = this.loadHistory(sessionId);
     try { history = await this.rollSummary(history, sessionId); } catch (e) {}
     const recallRes = await this.recallBlock(text);
+    // 他问自己的事，就只喂「关于他的事实」；不然她的自述（「我叫鲸倩」）会被当成他的信息
+    if (recallRes && askingAboutHimself(text)) {
+      const his = (recallRes.hits || []).filter((h) => kindOf(h.text) === 'his');
+      recallRes.block = his.length
+        ? '【关于他的事实】\n' + his.map((h) => '- ' + (h.pinned ? '★' : '') + forPrompt(h.text)).join('\n')
+        : '';
+    }
     const captured = this.capture(text);
     const messages = this.buildMessages(text, recallRes, history);
     // 附件：文本内容接在这一次的用户消息后面；图片换成 OpenAI 的多模态 content 数组。

@@ -36,10 +36,13 @@ function ok(name, cond, extra) {
   const store = new Store(path.join(TMP, 'memory'));
   store.add({ text: '用户叫小王', kind: 'fact', importance: 3, pinned: true });
   store.add({ text: '老爸最爱冰美式不加糖', kind: 'preference', importance: 3 });
-  const r = await recall(store, '我叫什么 爱喝什么', { topK: 5 });
+  store.add({ text: '我害怕失去老爸', kind: 'emotional', importance: 4 });
+  const r = await recall(store, '我叫什么 爱喝什么 害怕', { topK: 6 });
   ok('召回块里没有「用户」「老爸」', !/用户|老爸/.test(r.block), r.block);
   ok('召回块里说的是「他」', /他叫小王/.test(r.block) && !/你叫小王/.test(r.block), r.block);
-  ok('召回的条数正常', r.hits.length >= 1, r.hits.length);
+  ok('分两段：他的事实 / 你俩的回忆', /【关于他的事实】/.test(r.block) && /【你俩之间的回忆片段】/.test(r.block), r.block);
+  ok('回忆片段里不把「她的情绪」写成他的事', /我害怕失去/.test(r.block), r.block);
+  ok('召回的条数正常', r.hits.length >= 2, r.hits.length);
 
   const raw = store.active().map((x) => x.text).join('|');
   ok('库里的原文还是第三人称（换人称只发生在展示层）', /用户叫小王/.test(raw) && !/他叫小王/.test(raw), raw);

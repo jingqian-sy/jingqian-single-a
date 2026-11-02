@@ -23,6 +23,15 @@ function forPrompt(text) {
     .replace(/老爸/g, '他');
 }
 
+// 库是混的：有「他的事实」，也有她自己当时的情绪和两人聊天的片段。
+// 分开喂，模型才不会把她的回忆当成关于他的事实乱用。
+function kindOf(text) {
+  const t = String(text || '').trim();
+  if (/^用户|^老爸|^他(的|叫|喜欢|讨厌|爱|在|是|有|住)/.test(t)) return 'his';
+  if (/^我/.test(t)) return 'self';
+  return 'echo';
+}
+
 function decayWeight(item) {
   if (item.pinned) return 1;
   const hl = HALF_LIFE[item.importance] || 45;
@@ -118,10 +127,18 @@ async function recall(store, query, opts) {
 
   if (hits.length) store.markUsed(hits.map((h) => h.id));
 
-  const block = hits.length
-    ? hits.map((h) => '- ' + (h.pinned ? '★' : '') + forPrompt(truncate(h.text, 160))).join('\n')
-    : '';
+  // 分两类拼：他的事实优先；她自己的回忆/聊天片段单独一段，并说清「不是事实」
+  const his = hits.filter((h) => kindOf(h.text) === 'his');
+  const own = hits.filter((h) => kindOf(h.text) !== 'his');
+  const line = (h) => '- ' + (h.pinned ? '★' : '') + forPrompt(truncate(h.text, 160));
+  const parts = [];
+  if (his.length) parts.push('【关于他的事实】\n' + his.map(line).join('\n'));
+  if (own.length) {
+    parts.push('【你俩之间的回忆片段】（她当时的话或情绪，不是关于他的事实，别当成事实照搬）\n'
+      + own.slice(0, 3).map(line).join('\n'));
+  }
+  const block = parts.join('\n\n');
   return { hits, used_vector: usedVector, block };
 }
 
-module.exports = { recall, decayWeight, HALF_LIFE, forPrompt };
+module.exports = { recall, decayWeight, HALF_LIFE, forPrompt, kindOf };
