@@ -2178,6 +2178,8 @@ namespace JingqianShell
             return chatView == null ? "" : chatView.CopyIndexForTest(i);
         }
 
+        public int ChatCount { get { return chatView == null ? 0 : chatView.Count; } }
+
         public int LoadHistoryNow()
         {
             if (chatView != null && chatView.Count > 0) return chatView.Count;  // 已经铺过就别重复铺
@@ -4119,13 +4121,20 @@ namespace JingqianShell
                         // 选中 + 复制：气泡是自绘的，这里验的是「点选/Ctrl+C 走的那条路」真把字送进剪贴板
                         try
                         {
-                            string copied = f.CopyBubbleForTest(0);
-                            string clip = "";
-                            try { clip = Clipboard.GetText(); } catch { }
-                            bool copyOk = copied.Length > 0 && clip.Length > 0
-                                && clip.IndexOf(copied.Substring(0, Math.Min(6, copied.Length))) >= 0;
-                            Console.WriteLine("COPY " + (copyOk ? "OK" : "FAIL") + " chars=" + copied.Length + " clipboard=" + clip.Length);
-                            if (!copyOk) fail++;
+                            if (f.ChatCount == 0)
+                            {
+                                Console.WriteLine("COPY SKIP 没有历史可复制（服务里没有对话）");
+                            }
+                            else
+                            {
+                                string copied = f.CopyBubbleForTest(0);
+                                string clip = "";
+                                try { clip = Clipboard.GetText(); } catch { }
+                                bool copyOk = copied.Length > 0 && clip.Length > 0
+                                    && clip.IndexOf(copied.Substring(0, Math.Min(6, copied.Length))) >= 0;
+                                Console.WriteLine("COPY " + (copyOk ? "OK" : "FAIL") + " chars=" + copied.Length + " clipboard=" + clip.Length);
+                                if (!copyOk) fail++;
+                            }
                         }
                         catch (Exception ex) { Console.WriteLine("COPY FAIL " + ex.Message); fail++; }
                         try
