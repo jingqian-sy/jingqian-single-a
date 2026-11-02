@@ -17,7 +17,7 @@ const path = require('path');
 const { Router } = require('./router');
 const { Store } = require('./memory/store');
 const { EventLayer } = require('./memory/event');
-const { recall, secondPerson } = require('./memory/retrieve');
+const { recall, forPrompt } = require('./memory/retrieve');
 const { consolidate } = require('./memory/consolidate');
 const { Tools } = require('./tools');
 const { PluginHost } = require('./plugins');
@@ -33,7 +33,9 @@ const DEFAULT_PERSONA = [
   '硬规矩：说「做好了」之前必须真的调用过工具并看过返回值；没调用就不许说完成，做不到了就直说做不到。',
   '不知道的事就说不确定，不许编文件内容、不许编数字。',
   '人称要清楚：他说「我」指的是他自己，你回他用「你」；只有你自己的事才用「我」。',
-  '记忆里写成「用户」的，全部指他；跟他说话永远只准用「你」，不许对他说「用户」这两个字。',
+  '他打「我喜欢什么」是在说他自己；问「你知道我喜欢什么吗」是考你记不记得他的事，不是问你自己喜欢什么。',
+  '「你」永远指他，不是指你自己；说自己的时候才用「我」，比如「我记着」「我看看」。',
+  '记忆里写成「用户」「老爸」的，全部指他；跟他说话永远只准用「你」，不许对他说「用户」这两个字。',
   '别把他说的事说成你自己的（他说他爱喝冰美式，你就说「你爱喝」，不许说「我刚喝了一杯」）。'
 ].join('\n');
 
@@ -239,13 +241,13 @@ class Her {
   buildMessages(userText, recallRes, history) {
     const parts = [];
     const sum = this.loadSummary(this._curSession);
-    if (sum) parts.push('【之前聊到的】\n' + secondPerson(sum));
+    if (sum) parts.push('【之前聊到的】\n' + forPrompt(sum));
     if (recallRes.block) {
-      parts.push('【参考记忆】（下面这些里的「你」都是他，说的是他的事；跟他说话一律用「你」，'
-        + '别对他说「用户」两个字，也别把他说的事说成你自己经历的）\n' + recallRes.block);
+      parts.push('【参考记忆】（下面这些里的「他」就是跟你说话的那个人，都是他的事；'
+        + '别把这些事说成你自己的。回他的时候用「你」称呼他，别对他说「用户」两个字）\n' + recallRes.block);
     }
     const ev = this.events.block(5);
-    if (ev) parts.push('【事件时间轴】\n' + secondPerson(ev));
+    if (ev) parts.push('【事件时间轴】\n' + forPrompt(ev));
     const userContent = parts.length ? parts.join('\n\n') + '\n\n【这次的话】\n' + userText : userText;
     return [{ role: 'system', content: this.cfg.persona || DEFAULT_PERSONA }]
       .concat(history.messages)
@@ -256,6 +258,13 @@ class Her {
     if (!this.cfg.memory || this.cfg.memory.autoCapture === false) return null;
     if (!CAPTURE.test(String(userText))) return null;
     const raw = String(userText).trim();
+    // 问句不记：他问「我喜欢什么」是在问，不是在告诉你事实。
+    // 以前会把问句记成「他喜欢喝什么」，后面越问越乱，人也分不清了。
+    if (/[?？]\s*$/.test(raw)) return null;
+    if (/(吗|呢|什么|谁|哪天|多少|怎么|为什么|哪一个?)[？?]?\s*$/.test(raw)) return null;
+    // 复述/元话语不记：像「你：…」这种带前缀的、以及「我说/你以为」这类，都不是事实
+    if (/^你\s*[：:]/.test(raw)) return null;
+    if (/^(我说|你说|你以为|我问|你问)/.test(raw)) return null;
     const pinned = /记住|别忘|永远|一定/.test(raw);
     // 存的是「那件事」，不是「叫她记住」这句话本身：
     // 「记住：我喜欢喝美式咖啡。」要落成「我喜欢喝美式咖啡」，否则和已有记忆对不上、去重也失效。

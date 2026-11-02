@@ -12,13 +12,15 @@ const { tokens, cosine, truncate, daysAgo } = require('../util');
 
 const HALF_LIFE = { 1: 14, 2: 45, 3: 120, 4: 365 };
 
-// 记忆是按第三人称存的（「用户喜欢…」），但拿去给模型用时必须换回第二人称，
-// 否则小模型会照抄「用户」这个词，或者把他说的事说成自己的。
-function secondPerson(text) {
+// 记忆是按第三人称存的（「用户喜欢…」「老爸喜欢…」），但拿去给模型用的时候
+// 不能换成「你」——系统提示里「你」指的是她本人，模型会把记忆当成自己的事。
+// 所以统一换成「他」（明确指的是跟她说话的那个人）。
+function forPrompt(text) {
   return String(text || '')
-    .replace(/用户的/g, '你的')
-    .replace(/用户/g, '你')
-    .replace(/^你叫/, '你叫');
+    .replace(/用户的/g, '他的')
+    .replace(/用户/g, '他')
+    .replace(/老爸的/g, '他的')
+    .replace(/老爸/g, '他');
 }
 
 function decayWeight(item) {
@@ -117,9 +119,9 @@ async function recall(store, query, opts) {
   if (hits.length) store.markUsed(hits.map((h) => h.id));
 
   const block = hits.length
-    ? hits.map((h) => '- ' + (h.pinned ? '★' : '') + secondPerson(truncate(h.text, 160))).join('\n')
+    ? hits.map((h) => '- ' + (h.pinned ? '★' : '') + forPrompt(truncate(h.text, 160))).join('\n')
     : '';
   return { hits, used_vector: usedVector, block };
 }
 
-module.exports = { recall, decayWeight, HALF_LIFE, secondPerson };
+module.exports = { recall, decayWeight, HALF_LIFE, forPrompt };
