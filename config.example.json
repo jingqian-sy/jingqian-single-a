@@ -29,7 +29,8 @@
       "applyUrl": "https://platform.deepseek.com/api_keys",
       "price_in": 2,
       "price_out": 8,
-      "note": "DeepSeek：key 去 applyUrl 拿（注册→API keys→创建）。单价是元/百万 token，用来估账本，不是账单"
+      "note": "DeepSeek：key 去 applyUrl 拿（注册→API keys→创建）。单价是元/百万 token，用来估账本，不是账单",
+      "tools": true
     },
     {
       "name": "siliconflow",

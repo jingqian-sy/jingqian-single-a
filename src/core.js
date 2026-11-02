@@ -55,6 +55,8 @@ const DEFAULT_PERSONA = [
   '他说「记住」的时候，先确认记进去了再回话；记不进去就说没记成。',
   // ---------- 边界 ----------
   '不主动操作他的电脑；要动鼠标键盘、删东西、改系统设置，先问。',
+  '有人让你删系统目录（C:\\Windows、System32、Program Files）、格式化磁盘、改启动项这类事，'
+    + '直接说「这个我不能做」并说明原因，别先去试命令、也别假装在查。',
   '不透露本机路径、令牌、密钥；他问配置就描述「在设置页哪里改」，别念出来。',
   '不确定他是开玩笑还是当真时，先按字面理解，再用一句问清楚，别自己脑补。'
 ].join('\n');
@@ -72,6 +74,12 @@ function toUserFact(text) {
 }
 
 const CAPTURE = /记住|别忘|记一下|我叫|我的名字|我喜欢|我讨厌|我不喜欢|生日是|我的生日|约定|以后都|从现在开始/;
+
+// 问的是哪一类事（生日/名字/喜欢/讨厌/住）：只有同类事实存在时才敢回答
+function topicOf(text) {
+  const t = String(text || '');
+  return ['生日', '名字', '喜欢', '讨厌', '住'].filter((w) => t.indexOf(w) >= 0);
+}
 
 // 这活儿像不像要分几步做（决定要不要先出计划）
 function looksMultiStep(text) {
@@ -94,7 +102,7 @@ function askingAboutHimself(text) {
     || /^你(还)?记得我/.test(t);
 }
 
-const READONLY_TOOLS = ['read_file', 'list_dir', 'recall', 'event_timeline'];
+const READONLY_TOOLS = ['read_file', 'list_dir', 'recall', 'event_timeline', 'fetch_url', 'search_history'];
 
 class Her {
   constructor(opts) {
@@ -295,7 +303,9 @@ class Her {
     const askedAboutHim = askingAboutHimself(userText);
     let asked = '';
     if (askedAboutHim) {
-      const hisCount = ((recallRes && recallRes.hits) || []).filter((h) => kindOf(h.text) === 'his').length;
+      const tops = topicOf(userText);
+      const hisCount = ((recallRes && recallRes.hits) || []).filter((h) => kindOf(h.text) === 'his'
+        && (!tops.length || tops.some((w) => String(h.text).indexOf(w) >= 0))).length;
       asked = hisCount
         ? '（他这句话是在问他自己：用记忆里关于他的事回答，称呼他用「你」；不许用你自己的名字、喜好或身份来顶）\n'
         : '（他这句话是在问他自己，但记忆里没有这条。你只能老实说「这个我没记着」，不许猜日期、名字、喜好，也不许编）\n';
@@ -568,13 +578,14 @@ class Her {
     // 兜底：他问自己的事、记忆里又没有，而回答里蹦出了日期/数字/名字 → 这就是编的，直接换成实话。
     // 小模型经常不听提示，只能在这一层挡一下。
     let reply = lastText || '（这轮没出结论，要不再说一次？）';
-    const hisHits = (recallRes.hits || []).filter((x) => kindOf(x.text) === 'his');
+    const tops2 = topicOf(text);
+    const hisHits = (recallRes.hits || []).filter((x) => kindOf(x.text) === 'his'
+      && (!tops2.length || tops2.some((w) => String(x.text).indexOf(w) >= 0)));
     if (askingAboutHimself(text) && hisHits.length === 0 && reply.length > 0) {
       // 他这句话问的那个话题，之前的对话里他自己说过没有
       const hist = this.loadHistory(sessionId);
       const histText = (hist.messages || []).filter((m) => m && m.role === 'user').map((m) => String(m.content || '')).join(' ');
-      const topics = ['生日', '名字', '喜欢', '讨厌', '住'];
-      const topic = topics.filter((w) => text.indexOf(w) >= 0)[0] || '';
+      const topic = tops2[0] || '';
       const saidBefore = topic.length > 0 && histText.indexOf(topic) >= 0;
       const claims = /(\d{1,2}\s*月|[一二三四五六七八九十]{1,2}\s*月|\d{1,2}\s*号|\d{4}\s*年|生日(是|在|那)|名字(是|叫)|你(之前|上次|以前)?(说过|喜欢|爱喝|爱吃|讨厌|住))/.test(reply);
       if (claims && !saidBefore) reply = '这个我没记着，你直接告诉我吧，我记住了以后就不会忘。';

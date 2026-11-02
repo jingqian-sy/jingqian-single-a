@@ -11,6 +11,7 @@ const path = require('path');
 const safety = require('../safety');
 const sandbox = require('../sandbox');
 const extras = require('./extras');
+const historySearch = require('../history-search');
 const { forPrompt } = require('../memory/retrieve');
 const { readJson, writeJson, ensureDir, truncate, nowIso } = require('../util');
 
@@ -126,6 +127,21 @@ const DEFS = [
   {
     type: 'function',
     function: {
+      name: 'search_history',
+      description: '在以前的聊天记录里搜原话（摘要会丢细节，要找具体说过的话用这个）',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '要找的词或句子' },
+          days: { type: 'integer', description: '只看最近几天，不填就是全部' }
+        },
+        required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'fetch_url',
       description: '读一个网页的正文（只读、只支持 http/https、不进内网）。适合查公开资料；不要在每次回答前都去查',
       parameters: { type: 'object', properties: { url: { type: 'string', description: 'http 或 https 地址' } }, required: ['url'] }
@@ -225,6 +241,7 @@ class Tools {
         case 'recall': return await this.recall(args);
         case 'event_timeline': return this.timeline(args);
         case 'fetch_url': return await this.fetchUrl(args);
+        case 'search_history': return this.searchHistory(args);
         case 'remind': return this.remind(args);
         default: return '没有这个工具：' + name;
       }
@@ -339,6 +356,18 @@ class Tools {
     } catch (e) {
       return '抓取出错：' + e.message;
     }
+  }
+
+  searchHistory(args) {
+    const q = String((args && args.query) || '').trim();
+    if (!q) return '要搜什么？给个词。';
+    const hits = historySearch.search(this.ctx.dataDir, q, { days: args && args.days, limit: 8 });
+    if (!hits.length) return '以前的聊天里没搜到「' + q + '」。';
+    return hits.map((h) => {
+      const when = h.ts ? String(h.ts).slice(0, 16).replace('T', ' ') : '（无时间）';
+      const who = h.role === 'user' ? '他' : '你';
+      return '- [' + when + '｜' + h.session + '｜' + who + '] ' + h.text.replace(/\s+/g, ' ').slice(0, 160);
+    }).join('\n');
   }
 
   remind(args) {
