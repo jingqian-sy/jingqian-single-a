@@ -969,6 +969,7 @@ namespace JingqianShell
             });
             ToolBtn(toolPanel, ref tx, "状态", false, delegate { ShowStatus(); });
             ToolBtn(toolPanel, ref tx, "记忆", false, delegate { OpenMemory(); });
+            ToolBtn(toolPanel, ref tx, "插件", false, delegate { OpenPlugins(); });
             ToolBtn(toolPanel, ref tx, "设置", true, delegate { OpenSettings(); });
             btnVoice = ToolBtn(toolPanel, ref tx, "朗读", false, delegate { ToggleVoice(); });
 
@@ -2264,9 +2265,21 @@ namespace JingqianShell
                 MessageBox.Show(this, "打开记忆失败：" + ex.Message, "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
+        public void OpenPlugins()
+        {
+            try
+            {
+                using (PluginsForm f = new PluginsForm(api))
+                {
+                    f.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "打开插件失败：" + ex.Message, "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
     }
-
-    // ===================== 设置窗 =====================
     class SettingsForm : Form
     {
         readonly ApiClient api;
@@ -4069,6 +4082,22 @@ namespace JingqianShell
                 }
             }
             catch (Exception ex) { Console.WriteLine("COST SHOT FAIL " + ex.Message); }
+            try
+            {
+                using (PluginsForm pf = new PluginsForm(api))
+                {
+                    pf.StartPosition = FormStartPosition.Manual;
+                    pf.Location = new Point(-30000, -30000);
+                    pf.ShowInTaskbar = false;
+                    pf.Show();
+                    Application.DoEvents();
+                    Thread.Sleep(600);
+                    Application.DoEvents();
+                    Shot(pf, Path.Combine(repo, "data", "_ui_plugins.png"));
+                    pf.Hide();
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("PLUGINS SHOT FAIL " + ex.Message); }
             return 0;
         }
 
@@ -4155,6 +4184,258 @@ namespace JingqianShell
                 if (mode == "dump") return f.DumpCount > 0 ? 0 : 2;
             }
             return 0;
+        }
+    }
+
+    // ===================== 插件：装 / 启停 / 卸载 / 跑插件自己的按钮 =====================
+    class PluginsForm : Form
+    {
+        readonly ApiClient api;
+        ListView list;
+        Label hint;
+        FlatBtn btnToggle;
+        FlatBtn btnInstall;
+        FlatBtn btnUninstall;
+        FlatBtn btnRun;
+        FlatBtn btnFolder;
+        FlatBtn btnRefresh;
+        FlatBtn btnClose;
+        List<string> names = new List<string>();
+        List<bool> enabledFlags = new List<bool>();
+        List<string> uiLabels = new List<string>();
+        List<string> dirs = new List<string>();
+
+        public PluginsForm(ApiClient api)
+        {
+            this.api = api;
+            Text = "插件 · 鲸倩";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            ShowInTaskbar = false;
+            Font = Theme.Ui(9f, false);
+            BackColor = Theme.Paper;
+            ClientSize = new Size(Dpi.X(760), Dpi.X(470));
+            try { string ico = Path.Combine(Application.StartupPath, "icon.ico"); if (File.Exists(ico)) Icon = new Icon(ico); } catch { }
+
+            Label title = new Label();
+            title.Text = "插件";
+            title.Font = Theme.Ui(12f, true);
+            title.ForeColor = Theme.Text;
+            title.SetBounds(Dpi.X(18), Dpi.X(12), Dpi.X(200), Dpi.X(26));
+            Controls.Add(title);
+
+            Label sub = new Label();
+            sub.Text = "装进本地目录的插件，用清单声明权限；装完要「启用」才会加载。";
+            sub.ForeColor = Theme.Dim;
+            sub.Font = Theme.Ui(8.5f, false);
+            sub.SetBounds(Dpi.X(18), Dpi.X(40), Dpi.X(700), Dpi.X(22));
+            Controls.Add(sub);
+
+            list = new ListView();
+            list.View = View.Details;
+            list.FullRowSelect = true;
+            list.HideSelection = false;
+            list.BorderStyle = BorderStyle.FixedSingle;
+            list.Font = Theme.Ui(9f, false);
+            list.BackColor = Color.White;
+            list.SetBounds(Dpi.X(18), Dpi.X(68), Dpi.X(724), Dpi.X(280));
+            list.Columns.Add("名字", Dpi.X(130));
+            list.Columns.Add("版本", Dpi.X(66));
+            list.Columns.Add("状态", Dpi.X(120));
+            list.Columns.Add("权限", Dpi.X(150));
+            list.Columns.Add("说明", Dpi.X(250));
+            list.SelectedIndexChanged += delegate { UpdateButtons(); };
+            list.DoubleClick += delegate { Toggle(); };
+            Controls.Add(list);
+
+            hint = new Label();
+            hint.AutoSize = false;
+            hint.ForeColor = Theme.Dim;
+            hint.Font = Theme.Ui(8.5f, false);
+            hint.SetBounds(Dpi.X(18), Dpi.X(354), Dpi.X(724), Dpi.X(44));
+            hint.Text = "插件和服务同一个进程（可信插件模式）：只装你自己看过、信得过的。";
+            Controls.Add(hint);
+
+            btnToggle = Make("启用/停用", delegate { Toggle(); });
+            btnInstall = Make("安装…", delegate { Install(); });
+            btnUninstall = Make("卸载", delegate { Uninstall(); });
+            btnRun = Make("运行插件按钮", delegate { RunUi(); });
+            btnFolder = Make("插件目录", delegate { OpenFolder(); });
+            btnRefresh = Make("刷新", delegate { LoadList(); });
+            btnClose = Make("关闭", delegate { Close(); });
+
+            int x = Dpi.X(18);
+            int y = Dpi.X(406);
+            foreach (FlatBtn b in new FlatBtn[] { btnToggle, btnInstall, btnUninstall, btnRun, btnFolder, btnRefresh })
+            {
+                if (b == null) continue;
+                b.SetBounds(x, y, b.Width, Dpi.X(30));
+                x += b.Width + Dpi.X(8);
+            }
+            btnClose.SetBounds(Dpi.X(760 - 18 - btnClose.Width), y, btnClose.Width, Dpi.X(30));
+            Controls.Add(btnClose);
+
+            LoadList();
+        }
+
+        FlatBtn Make(string text, EventHandler click)
+        {
+            FlatBtn b = new FlatBtn(text, Color.White, Theme.AccentDeep);
+            b.NormalBorder = Theme.Border;
+            b.Font = Theme.Ui(9f, false);
+            b.Size = new Size(TextRenderer.MeasureText(text, b.Font).Width + Dpi.X(24), Dpi.X(30));
+            b.Click += click;
+            Controls.Add(b);
+            return b;
+        }
+
+        void LoadList()
+        {
+            list.Items.Clear();
+            names.Clear(); enabledFlags.Clear(); uiLabels.Clear(); dirs.Clear();
+            Dictionary<string, object> r;
+            try { r = api.Get("/api/plugins", 8000); }
+            catch (Exception ex)
+            {
+                hint.Text = "服务没接上：" + ex.Message;
+                UpdateButtons();
+                return;
+            }
+            object arr;
+            if (r.TryGetValue("items", out arr) && arr is object[])
+            {
+                foreach (object o in (object[])arr)
+                {
+                    Dictionary<string, object> d = o as Dictionary<string, object>;
+                    if (d == null) continue;
+                    string name = d.ContainsKey("name") ? Convert.ToString(d["name"]) : "";
+                    string ver = d.ContainsKey("version") ? Convert.ToString(d["version"]) : "";
+                    bool en = d.ContainsKey("enabled") && Convert.ToBoolean(d["enabled"]);
+                    bool loaded = d.ContainsKey("loaded") && Convert.ToBoolean(d["loaded"]);
+                    string err = d.ContainsKey("error") ? Convert.ToString(d["error"]) : "";
+                    string perms = "";
+                    object pv;
+                    if (d.TryGetValue("permissions", out pv) && pv is object[])
+                    {
+                        List<string> ps = new List<string>();
+                        foreach (object p in (object[])pv) ps.Add(Convert.ToString(p));
+                        perms = string.Join("、", ps.ToArray());
+                    }
+                    string status = err.Length > 0 ? "加载失败" : (en ? (loaded ? "已启用" : "已启用·未加载") : "未启用");
+                    string desc = d.ContainsKey("description") ? Convert.ToString(d["description"]) : "";
+                    if (err.Length > 0) desc = "！" + err;
+                    ListViewItem it = new ListViewItem(name);
+                    it.SubItems.Add(ver);
+                    it.SubItems.Add(status);
+                    it.SubItems.Add(perms);
+                    it.SubItems.Add(desc);
+                    list.Items.Add(it);
+                    names.Add(name);
+                    enabledFlags.Add(en);
+                    uiLabels.Add(d.ContainsKey("ui") ? Convert.ToString(d["ui"]) : "");
+                    dirs.Add(d.ContainsKey("dir") ? Convert.ToString(d["dir"]) : "");
+                }
+            }
+            if (names.Count == 0) hint.Text = "还没装插件。点「安装…」选一个插件目录（里面有 plugin.json）。";
+            else hint.Text = "共 " + names.Count + " 个插件。插件和服务同一个进程（可信插件模式）：只装你自己看过、信得过的。";
+            UpdateButtons();
+        }
+
+        void UpdateButtons()
+        {
+            bool has = list.SelectedIndices.Count > 0;
+            btnToggle.Enabled = has;
+            btnUninstall.Enabled = has;
+            btnRun.Enabled = has && list.SelectedIndices[0] < uiLabels.Count && uiLabels[list.SelectedIndices[0]].Length > 0;
+        }
+
+        string SelectedName()
+        {
+            if (list.SelectedIndices.Count == 0) return "";
+            int i = list.SelectedIndices[0];
+            return i < names.Count ? names[i] : "";
+        }
+
+        void Toggle()
+        {
+            int i = list.SelectedIndices.Count > 0 ? list.SelectedIndices[0] : -1;
+            if (i < 0 || i >= names.Count) return;
+            string act = enabledFlags[i] ? "disable" : "enable";
+            try
+            {
+                Dictionary<string, object> body = new Dictionary<string, object>();
+                body["name"] = names[i];
+                Dictionary<string, object> r = api.Post("/api/plugins/" + act, body, 10000);
+                if (r.ContainsKey("ok") && !Convert.ToBoolean(r["ok"])) MessageBox.Show(this, Convert.ToString(r["error"]), "插件", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex) { MessageBox.Show(this, "操作失败：" + ex.Message, "插件", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            LoadList();
+        }
+
+        void Install()
+        {
+            using (FolderBrowserDialog d = new FolderBrowserDialog())
+            {
+                d.Description = "选一个插件目录（里面要有 plugin.json 和入口文件）";
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    Dictionary<string, object> body = new Dictionary<string, object>();
+                    body["path"] = d.SelectedPath;
+                    Dictionary<string, object> r = api.Post("/api/plugins/install", body, 15000);
+                    if (!r.ContainsKey("ok") || !Convert.ToBoolean(r["ok"]))
+                        MessageBox.Show(this, Convert.ToString(r.ContainsKey("error") ? r["error"] : "装不上"), "插件", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    else
+                        MessageBox.Show(this, "装好了。还要在列表里选中它，点一次「启用」才会加载。", "插件", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex) { MessageBox.Show(this, "安装失败：" + ex.Message, "插件", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                LoadList();
+            }
+        }
+
+        void Uninstall()
+        {
+            string name = SelectedName();
+            if (name.Length == 0) return;
+            if (MessageBox.Show(this, "卸载「" + name + "」？会把它的目录一起删掉（插件自己的数据也在里面）。", "插件",
+                MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            try
+            {
+                Dictionary<string, object> body = new Dictionary<string, object>();
+                body["name"] = name;
+                Dictionary<string, object> r = api.Post("/api/plugins/uninstall", body, 10000);
+                if (!r.ContainsKey("ok") || !Convert.ToBoolean(r["ok"]))
+                    MessageBox.Show(this, Convert.ToString(r.ContainsKey("error") ? r["error"] : "卸载失败"), "插件", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex) { MessageBox.Show(this, "卸载失败：" + ex.Message, "插件", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            LoadList();
+        }
+
+        void RunUi()
+        {
+            string name = SelectedName();
+            if (name.Length == 0) return;
+            try
+            {
+                Dictionary<string, object> body = new Dictionary<string, object>();
+                body["name"] = name;
+                Dictionary<string, object> r = api.Post("/api/plugins/ui", body, 15000);
+                string text = (r.ContainsKey("ok") && Convert.ToBoolean(r["ok"]))
+                    ? Convert.ToString(r["result"])
+                    : Convert.ToString(r.ContainsKey("error") ? r["error"] : "没有结果");
+                MessageBox.Show(this, text, "插件 · " + name, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex) { MessageBox.Show(this, "跑不动：" + ex.Message, "插件", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        }
+
+        void OpenFolder()
+        {
+            string dir = dirs.Count > 0 ? Path.GetDirectoryName(dirs[0]) : "";
+            if (dir.Length == 0) { MessageBox.Show(this, "还没装插件，目录也还不知道。装一个之后再来。", "插件", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            try { System.Diagnostics.Process.Start("explorer.exe", "\"" + dir + "\""); }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message, "插件", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
     }
 }

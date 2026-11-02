@@ -1,0 +1,10 @@
+{
+  "name": "memo",
+  "title": "随手记",
+  "version": "1.0.0",
+  "description": "一个最小的插件示例：给模型加两个工具（记一条、列出来），一个本机接口，一个界面按钮。",
+  "author": "示例",
+  "main": "index.js",
+  "permissions": ["tool", "route", "ui"],
+  "ui": { "label": "看看便签" }
+}

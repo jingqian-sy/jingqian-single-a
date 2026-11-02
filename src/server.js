@@ -25,6 +25,7 @@ const qq = require('./qq/adapter');
 const qqConnect = require('./qq/connect');
 const radar = require('./radar');
 const attach = require('./attach');
+const { NAME_RE } = require('./plugins');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -209,6 +210,79 @@ async function handleApi(req, res, url) {
     if (!isLocal(req)) return denyRemote(res);
     const r = her.router.resetCost();
     return json(res, 200, { ok: true, reset: { at: r.at, day: r.day }, cost: her.router.costSummary(1).today });
+  }
+
+  // ---------- 插件模组（只给本机；插件同进程运行，只装信得过的） ----------
+  if (p === '/api/plugins' && req.method === 'GET') {
+    return json(res, 200, {
+      ok: true,
+      dir: her.plugins.dir,
+      enabled: her.plugins.enabledList(),
+      tools: her.tools.pluginToolNames(),
+      items: her.plugins.list()
+    });
+  }
+  if (p.indexOf('/api/plugins/') === 0 && req.method === 'POST') {
+    if (!isLocal(req)) return denyRemote(res);
+    const body = await readBody(req);
+    const act = p.slice('/api/plugins/'.length);
+    if (act === 'enable' || act === 'disable') {
+      const name = String(body.name || '');
+      if (!NAME_RE.test(name)) return json(res, 400, { ok: false, error: '插件名不合法' });
+      her.plugins.setEnabled(name, act === 'enable');
+      her.plugins.load();
+      return json(res, 200, {
+        ok: true, name, enabled: act === 'enable', applied: true, restartNeeded: false,
+        tools: her.tools.pluginToolNames(), items: her.plugins.list()
+      });
+    }
+    if (act === 'reload') {
+      her.plugins.load();
+      return json(res, 200, { ok: true, tools: her.tools.pluginToolNames(), items: her.plugins.list() });
+    }
+    if (act === 'install') {
+      const r = her.plugins.install(body.path);
+      if (!r.ok) return json(res, 200, r);
+      return json(res, 200, Object.assign({ ok: true, installed: true, hint: '装好了，还要在列表里点「启用」才会加载' }, r));
+    }
+    if (act === 'uninstall') {
+      const r = her.plugins.uninstall(body.name);
+      if (!r.ok) return json(res, 200, r);
+      her.plugins.load();
+      return json(res, 200, { ok: true, removed: r.name, tools: her.tools.pluginToolNames() });
+    }
+    if (act === 'ui') {
+      try {
+        const out = await her.plugins.callUi(String(body.name || ''), body.args || {});
+        return json(res, 200, { ok: true, result: out });
+      } catch (e) {
+        return json(res, 200, { ok: false, error: e.message });
+      }
+    }
+    return json(res, 404, { ok: false, error: '没有这个插件操作：' + act });
+  }
+  // 插件自己注册的接口：/api/plugin/<插件名>/<路径>
+  if (p.indexOf('/api/plugin/') === 0) {
+    if (!isLocal(req)) return denyRemote(res);
+    const rest = p.slice('/api/plugin/'.length);
+    const cut = rest.indexOf('/');
+    const name = cut < 0 ? rest : rest.slice(0, cut);
+    const sub = cut < 0 ? '' : rest.slice(cut + 1);
+    const fn = her.plugins.route(name, req.method, sub);
+    if (!fn) return json(res, 404, { ok: false, error: '插件里没有这个接口：' + p });
+    try {
+      const q = {};
+      url.searchParams.forEach((v, k) => { q[k] = v; });
+      const out = await fn({
+        method: req.method,
+        path: sub,
+        query: q,
+        body: req.method === 'POST' ? await readBody(req) : {}
+      });
+      return json(res, 200, { ok: true, result: out });
+    } catch (e) {
+      return json(res, 200, { ok: false, error: e.message });
+    }
   }
 
   if (p === '/api/memory' && req.method === 'GET') {

@@ -20,6 +20,7 @@ const { EventLayer } = require('./memory/event');
 const { recall } = require('./memory/retrieve');
 const { consolidate } = require('./memory/consolidate');
 const { Tools } = require('./tools');
+const { PluginHost } = require('./plugins');
 const safety = require('./safety');
 const sandbox = require('./sandbox');
 const { readJson, writeJson, appendJsonl, ensureDir, nowIso, uid, truncate, tokenCount } = require('./util');
@@ -85,6 +86,15 @@ class Her {
       ? path.resolve(this.root, process.env.JQ_CONFIG)
       : path.join(this.root, 'config.json');
     this.tools.ctx.subAgent = (task, model) => this.runSubAgent(task, model);
+    // 插件模组：只加载 config.plugins.enabled 里明确开着的；单个插件坏了不影响主程序
+    this.plugins = new PluginHost({
+      dataDir: this.dataDir,
+      cfg: this.cfg,
+      configPath: this.tools.ctx.configPath,
+      tools: this.tools,
+      store: this.store
+    });
+    try { this.plugins.load(); } catch (e) { /* 插件加载失败不拖垮启动 */ }
     this._subRunning = false;
   }
 

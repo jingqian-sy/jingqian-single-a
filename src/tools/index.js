@@ -143,12 +143,36 @@ class Tools {
     this.ctx = ctx; // { cfg, workspace, store, events, audit, dataDir, configPath, subAgent }
     this.remindFile = path.join(ctx.dataDir, 'reminders.json');
     this.pending = null;
+    // 插件注册上来的工具：插件只加这两张表，核心代码不动
+    this.pluginDefs = [];
+    this.pluginFns = {};
+  }
+
+  // 插件用：注册一个工具（名字不能和内建的重）
+  registerPluginTool(def, pluginName, fn) {
+    const name = String((def && def.name) || '');
+    const builtin = ALL_DEFS.some((d) => d.function.name === name) || extras.NAMES.has(name);
+    if (builtin || this.pluginFns[name]) throw new Error('工具名已经被占用：' + name);
+    this.pluginDefs.push({ type: 'function', function: { name, description: String(def.description || ''), parameters: def.parameters || { type: 'object', properties: {} } } });
+    this.pluginFns[name] = { plugin: pluginName, fn };
+    return name;
+  }
+
+  pluginToolNames() {
+    return Object.keys(this.pluginFns);
+  }
+
+  // 插件热重载前先清干净，免得同一个工具名注册两遍
+  clearPluginTools() {
+    this.pluginDefs = [];
+    this.pluginFns = {};
   }
 
   defs() {
     const cfg = this.ctx.cfg || {};
     const allowed = (cfg.tools && cfg.tools.names) || null;
-    const base = allowed ? ALL_DEFS.filter((d) => allowed.includes(d.function.name)) : ALL_DEFS;
+    const all = ALL_DEFS.concat(this.pluginDefs);
+    const base = allowed ? all.filter((d) => allowed.includes(d.function.name)) : all;
     return base.filter((d) => {
       const feat = extras.FEATURE_OF[d.function.name];
       const f = cfg.features || {};
@@ -177,6 +201,9 @@ class Tools {
     this.pending = null;
 
     try {
+      if (this.pluginFns[name]) {
+        return await this.pluginFns[name].fn(args || {}, { confirmed, plugin: this.pluginFns[name].plugin });
+      }
       if (extras.NAMES.has(name)) {
         return await extras.run(name, args, Object.assign({}, ctx, { confirmed, configPath: ctx.configPath }));
       }

@@ -165,5 +165,8 @@
     "enabled": false,
     "manifestUrl": "",
     "url": "https://github.com/jingqian-sy/jingqian-single-a/releases"
+  },
+  "plugins": {
+    "enabled": []
   }
 }
