@@ -29,6 +29,20 @@
 .radarBar span.txt { flex:1; }
 .radarBar .radarBtn { font-size:12px; padding:4px 10px; border-radius:8px; border:1px solid #e0c670; background:#fff; color:#6b5418; text-decoration:none; cursor:pointer; }
 .radarBar .radarBtn.go { background:#2f6f6a; border-color:#2f6f6a; color:#fff; }
+.modelBox { margin-left:auto; display:flex; align-items:center; gap:8px; }
+.modelBox select { font:13px/1.4 inherit; padding:5px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); max-width:220px; }
+.costBadge { font-size:12px; color:#2f6f6a; border:1px solid #cfe3dd; background:#fff; border-radius:8px; padding:4px 10px; cursor:pointer; white-space:nowrap; }
+.costBadge b { font-weight:600; }
+.costPanel { position:fixed; right:16px; top:64px; width:300px; background:#fff; border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 24px #00000014; padding:12px 14px; font-size:13px; z-index:20; }
+.costPanel h3 { margin:0 0 8px; font-size:13px; font-weight:600; }
+.costPanel .row2 { display:flex; justify-content:space-between; gap:8px; padding:3px 0; color:#555; }
+.costPanel .row2 b { font-weight:600; color:var(--ink); }
+.costPanel .tot { border-top:1px solid var(--line); margin-top:8px; padding-top:8px; font-weight:600; }
+.costPanel .note { color:var(--dim); font-size:11px; line-height:1.5; margin-top:8px; }
+.costPanel .acts { display:flex; gap:8px; margin-top:10px; }
+.costPanel .acts button { flex:1; padding:7px 10px; font-size:12px; border-radius:8px; }
+.costPanel .acts button.ghost { background:#fff; color:var(--accent); border:1px solid #cfe3dd; }
+.costPanel .acts button.danger { background:#fff; color:#a33; border:1px solid #e6c3c3; }
 </style>
 </head>
 <body>
@@ -40,8 +54,21 @@
 <header>
   <h1>鲸倩 · 单A 雏版</h1>
   <a href="/console.html" class="settingLink">⚙ 设置</a>
+  <div class="modelBox">
+    <select id="modelSel" title="用哪个模型：点一下立刻生效，不用重启"></select>
+    <span class="costBadge" id="costBadge" title="点开看今日账单">今日 ¥0.000</span>
+  </div>
   <span class="meta" id="meta">正在自检…</span>
 </header>
+
+<div class="costPanel" id="costPanel" hidden>
+  <h3>今日账单</h3>
+  <div id="costBody"></div>
+  <div class="acts">
+    <button type="button" class="ghost" id="costClose">收起</button>
+    <button type="button" class="danger" id="costReset">重置</button>
+  </div>
+</div>
 
 <main id="log">
   <div class="msg greet">
@@ -119,6 +146,114 @@ async function selfcheck() {
   }
 }
 selfcheck();
+
+// ---------- 模型切换（点一下立刻生效，不重启） ----------
+const modelSel = document.getElementById('modelSel');
+let routeState = null;
+let pinnedName = '';
+
+function describeMode(s) {
+  const r = (s && s.route) || {};
+  const first = (r.order || [])[0];
+  if (r.mode === 'fixed' && first) return '固定：' + first;
+  if (r.mode === 'cloud-first') return '自动：先云端';
+  return '自动：先免费';
+}
+
+async function loadRoute() {
+  try {
+    const r = await fetch('/api/route');
+    const j = await r.json();
+    if (!j.ok) return;
+    routeState = j;
+    const mode = (j.route && j.route.mode) || 'cheap-first';
+    const order = (j.route && j.route.order) || [];
+    pinnedName = mode === 'fixed' && order[0] ? order[0] : '';
+    const opts = [
+      { v: 'mode:cheap-first', t: '自动：先免费/本地' },
+      { v: 'mode:cloud-first', t: '自动：先云端' }
+    ].concat((j.providers || []).map((p) => ({
+      v: 'pin:' + p.name,
+      t: (pinnedName === p.name ? '✓ ' : '') + p.name + '（' + (p.model || '?') + '）'
+        + (p.free ? ' 免费' : '') + (p.ready ? '' : ' 未配置'),
+      ready: p.ready
+    })));
+    modelSel.innerHTML = '';
+    for (const o of opts) {
+      const el = document.createElement('option');
+      el.value = o.v;
+      el.textContent = o.t;
+      if (o.v.indexOf('pin:') === 0 && !o.ready) el.disabled = true;
+      if ((o.v.indexOf('pin:') === 0 && pinnedName && o.v === 'pin:' + pinnedName) || (!pinnedName && o.v === 'mode:' + mode)) el.selected = true;
+      modelSel.appendChild(el);
+    }
+    modelSel.title = '当前：' + describeMode(j) + (j.last && j.last.provider ? '（上次走 ' + j.last.provider + '）' : '');
+  } catch (e) { }
+}
+
+modelSel.onchange = async () => {
+  const v = modelSel.value || '';
+  const body = v.indexOf('pin:') === 0 ? { pin: v.slice(4) } : { mode: v.slice(5) };
+  modelSel.disabled = true;
+  try {
+    const r = await fetch('/api/route', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (!j.ok) add('她', '切换没成：' + j.error, 'err');
+    else add('她', '模型切好了：' + describeMode(j) + '。这一轮之后就走它。', '');
+  } catch (e) {
+    add('她', '切换失败：' + e.message, 'err');
+  } finally {
+    modelSel.disabled = false;
+    await loadRoute();
+    await loadCost();
+  }
+};
+
+// ---------- 账单：今日金额常驻 + 明细面板 + 重置 ----------
+const costBadge = document.getElementById('costBadge');
+const costPanel = document.getElementById('costPanel');
+const costBody = document.getElementById('costBody');
+const money = (n) => '¥' + (Number(n) || 0).toFixed(3);
+
+async function loadCost() {
+  try {
+    const r = await fetch('/api/cost?days=7');
+    const j = await r.json();
+    if (!j || j.ok === false) return;
+    costBadge.innerHTML = '今日 <b>' + money(j.today && j.today.cost) + '</b>';
+    const rows = [];
+    const ps = (j.today && j.today.providers) || [];
+    if (!ps.length) rows.push('<div class="row2"><span>今天还没调用</span><b>—</b></div>');
+    for (const p of ps) {
+      rows.push('<div class="row2"><span>' + p.name + ' · ' + p.calls + ' 次</span><b>' + money(p.cost) + '</b></div>');
+    }
+    rows.push('<div class="row2 tot"><span>今日合计</span><b>' + money(j.today && j.today.cost) + '</b></div>');
+    rows.push('<div class="row2"><span>近 7 天合计</span><b>' + money(j.total) + '</b></div>');
+    if (j.reset) rows.push('<div class="note">上次重置：' + String(j.reset.at).slice(0, 16).replace('T', ' ') + '（只从那时起累计，原账本还在）</div>');
+    rows.push('<div class="note">' + (j.note || '') + '</div>');
+    costBody.innerHTML = rows.join('');
+  } catch (e) { }
+}
+
+costBadge.onclick = async () => {
+  costPanel.hidden = !costPanel.hidden;
+  if (!costPanel.hidden) await loadCost();
+};
+document.getElementById('costClose').onclick = () => { costPanel.hidden = true; };
+document.getElementById('costReset').onclick = async () => {
+  if (!confirm('把今日已显示的金额归零？原始账本不会删，只是从现在重新算。')) return;
+  try {
+    const r = await fetch('/api/cost/reset', { method: 'POST' });
+    const j = await r.json();
+    if (j.ok) await loadCost();
+    else alert('重置失败：' + j.error);
+  } catch (e) { alert('重置失败：' + e.message); }
+};
+
+loadRoute();
+loadCost();
 
 // ---------- 免费模型雷达：页面内一条横条，问要不要配置（不弹窗、不自动改密钥） ----------
 let radarIds = [];
@@ -364,6 +499,8 @@ form.addEventListener('submit', async (ev) => {
       pending.appendChild(s);
     }
     selfcheck();
+    loadCost();
+    loadRoute();
   } catch (e) {
     pending.querySelector('.body').textContent = '网络/服务出错了：' + e.message;
     if (inCall) { phase = 'listening'; startListening(); }

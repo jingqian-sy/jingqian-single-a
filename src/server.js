@@ -86,6 +86,20 @@ function readBody(req) {
   });
 }
 
+function isLocal(req) {
+  const ip = (req.socket && req.socket.remoteAddress) || '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
+// 中控台/切换/重置都只给本机：这版没有登录鉴权，暴露出去等于把配置白送
+function denyRemote(res) {
+  return json(res, 403, { ok: false, error: '这个接口只给本机用' });
+}
+
+function readConfigFile() {
+  try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch (e) { return null; }
+}
+
 async function handleApi(req, res, url) {
   const p = url.pathname;
   if (p === '/api/chat' && req.method === 'POST') {
@@ -152,6 +166,49 @@ async function handleApi(req, res, url) {
     if (body.all !== true && !ids.length) return json(res, 400, { ok: false, error: '要么给 ids 数组，要么 all:true' });
     const r = radar.ack(her.dataDir, ids, body.all === true);
     return json(res, 200, { ok: true, ack: r.acked, remaining: r.remaining });
+  }
+
+  // ---------- 模型切换：改完立刻生效，不用重启 ----------
+  if (p === '/api/route' && req.method === 'GET') {
+    const cost = her.router.costSummary(1);
+    return json(res, 200, Object.assign({ ok: true }, her.router.routeState(), { cost: cost.today, currency: cost.currency }));
+  }
+  if (p === '/api/route' && req.method === 'POST') {
+    if (!isLocal(req)) return denyRemote(res);
+    const body = await readBody(req);
+    const cur = readConfigFile();
+    if (!cur) return json(res, 500, { ok: false, error: 'config.json 读不出来' });
+    const nextRoute = Object.assign({ mode: 'cheap-first', order: [], escalate: true }, her.router.route, {});
+    if (body.mode !== undefined) nextRoute.mode = String(body.mode);
+    if (Array.isArray(body.order)) nextRoute.order = body.order.map(String);
+    if (typeof body.escalate === 'boolean') nextRoute.escalate = body.escalate;
+    if (typeof body.pin === 'string' && body.pin) {
+      nextRoute.mode = 'fixed';
+      nextRoute.order = [body.pin].concat((nextRoute.order || []).filter((n) => n !== body.pin));
+    }
+    if (['cheap-first', 'cloud-first', 'fixed'].indexOf(nextRoute.mode) < 0) {
+      return json(res, 400, { ok: false, error: 'mode 只能是 cheap-first / cloud-first / fixed' });
+    }
+    const names = her.router.providers.map((x) => x.name);
+    const bad = (nextRoute.order || []).filter((n) => names.indexOf(n) < 0);
+    if (bad.length) return json(res, 400, { ok: false, error: '不认识的提供方：' + bad.join('、') });
+    cur.route = Object.assign({}, cur.route, { mode: nextRoute.mode, order: nextRoute.order, escalate: nextRoute.escalate !== false });
+    try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cur, null, 2), 'utf8'); }
+    catch (e) { return json(res, 500, { ok: false, error: '写 config.json 失败：' + e.message }); }
+    her.router.setRoute(cur.route);
+    her.router.routeLog('切换模型', { mode: cur.route.mode, order: cur.route.order });
+    return json(res, 200, Object.assign({ ok: true, applied: true, restartNeeded: false }, her.router.routeState()));
+  }
+
+  // ---------- 账单：今日/近 N 天 + 重置（只打水位，不删原账） ----------
+  if (p === '/api/cost' && req.method === 'GET') {
+    const days = Number(url.searchParams.get('days')) || 7;
+    return json(res, 200, Object.assign({ ok: true }, her.router.costSummary(days)));
+  }
+  if (p === '/api/cost/reset' && req.method === 'POST') {
+    if (!isLocal(req)) return denyRemote(res);
+    const r = her.router.resetCost();
+    return json(res, 200, { ok: true, reset: { at: r.at, day: r.day }, cost: her.router.costSummary(1).today });
   }
 
   if (p === '/api/memory' && req.method === 'GET') {

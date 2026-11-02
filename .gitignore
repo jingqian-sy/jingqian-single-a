@@ -31,6 +31,7 @@ data-2a/*
 node_modules/
 
 # 杂项
+.tmp/
 *.log
 .DS_Store
 Thumbs.db

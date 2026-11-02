@@ -60,9 +60,53 @@ class Router {
     return kept;
   }
 
+  // 运行时改路由：只改内存 + cfg，落盘由调用方（server 的 /api/route）负责。
+  // 支持 mode / order / escalate；fixes 传 provider 名 = 切成 fixed 并把它排最前（失败仍会回退到后面的）。
+  setRoute(patch) {
+    const p = patch || {};
+    const next = Object.assign({}, this.route);
+    if (typeof p.mode === 'string' && ['cheap-first', 'cloud-first', 'fixed'].indexOf(p.mode) >= 0) next.mode = p.mode;
+    if (Array.isArray(p.order)) next.order = p.order.map(String);
+    if (typeof p.escalate === 'boolean') next.escalate = p.escalate;
+    if (typeof p.pin === 'string' && p.pin) {
+      const rest = (this.route.order || []).filter((n) => n !== p.pin);
+      next.mode = 'fixed';
+      next.order = [p.pin].concat(rest);
+    }
+    this.route = next;
+    if (!this.cfg) this.cfg = {};
+    this.cfg.route = next;
+    return next;
+  }
+
+  // 给界面看的提供方清单：不回 key 明文，只回「填没填」
+  providerInfo() {
+    return this.providers.map((p) => ({
+      name: p.name,
+      model: p.model,
+      tier: p.tier || 'cloud',
+      ready: this.ready(p),
+      keyed: !!(p.key && String(p.key).trim()),
+      free: (Number(p.price_in) || 0) === 0 && (Number(p.price_out) || 0) === 0,
+      vision: !!p.vision,
+      enabled: p.enabled !== false
+    }));
+  }
+
+  routeState() {
+    const quotaInfo = this.lastQuota;
+    return {
+      route: { mode: this.route.mode || 'cheap-first', order: this.route.order || [], escalate: this.route.escalate !== false },
+      providers: this.providerInfo(),
+      last: this.last,
+      quota: quotaInfo
+    };
+  }
+
   // 本地模型不用填 key；云端没填 key 就当作没配好，跳过而不是报错
   ready(p) {
     if (!p || !p.base) return false;
+    if (p.enabled === false) return false;
     if (p.tier === 'local' || p.keyless) return true;
     return !!(p.key && String(p.key).trim() && String(p.key).indexOf('YOUR_') !== 0 && String(p.key) !== 'sk-xxx');
   }
@@ -203,6 +247,83 @@ class Router {
 
   today() {
     return readJson(path.join(this.dir, dayKey() + '.json'), { date: dayKey(), providers: {}, total: { calls: 0, prompt_tokens: 0, completion_tokens: 0, cost: 0 } });
+  }
+
+  // ---------- 账单：今日 / 近 N 天 / 重置水位 ----------
+  // 重置不是删账：记一条「从那以后的消费从零算」的水位。原始按天账本一直留着，
+  // 所以随时能反悔（删掉 cost-reset.json 就恢复全天累计）。
+  resetFile() { return path.join(this.dataDir, 'cost-reset.json'); }
+
+  resetInfo() {
+    const r = readJson(this.resetFile(), null);
+    if (!r || !r.day) return null;
+    return r.day === dayKey() ? r : null; // 跨天自动失效
+  }
+
+  resetCost() {
+    const t = this.today();
+    const provs = {};
+    for (const k of Object.keys(t.providers || {})) {
+      const v = t.providers[k] || {};
+      provs[k] = { calls: Number(v.calls) || 0, cost: Number(v.cost) || 0 };
+    }
+    const snap = {
+      at: new Date().toISOString(),
+      day: t.date,
+      baseline: Object.assign({ calls: 0, prompt_tokens: 0, completion_tokens: 0, cost: 0 }, t.total),
+      providers: provs
+    };
+    writeJson(this.resetFile(), snap);
+    return snap;
+  }
+
+  costSummary(days) {
+    const n = Math.max(1, Math.min(Number(days) || 7, 60));
+    const round = (x) => Math.round((Number(x) || 0) * 1e6) / 1e6;
+    const raw = this.ledgerAll(n).map((d) => ({
+      date: d.date,
+      calls: Number((d.total || {}).calls) || 0,
+      prompt_tokens: Number((d.total || {}).prompt_tokens) || 0,
+      completion_tokens: Number((d.total || {}).completion_tokens) || 0,
+      cost: round((d.total || {}).cost),
+      providers: Object.keys(d.providers || {}).map((k) => ({
+        name: k,
+        model: d.providers[k].model || '',
+        calls: Number(d.providers[k].calls) || 0,
+        tokens: (Number(d.providers[k].prompt_tokens) || 0) + (Number(d.providers[k].completion_tokens) || 0),
+        cost: round(d.providers[k].cost)
+      }))
+    }));
+    const reset = this.resetInfo();
+    const out = raw.map((d) => {
+      if (!reset || d.date !== reset.day) return d;
+      const b = reset.baseline || {};
+      const provs = d.providers.map((p) => {
+        const bp = (reset.providers || {})[p.name] || {};
+        return Object.assign({}, p, {
+          calls: Math.max(0, p.calls - (Number(bp.calls) || 0)),
+          cost: round(Math.max(0, p.cost - (Number(bp.cost) || 0)))
+        });
+      }).filter((p) => p.calls > 0 || p.cost > 0);
+      return {
+        date: d.date,
+        calls: Math.max(0, d.calls - (Number(b.calls) || 0)),
+        prompt_tokens: Math.max(0, d.prompt_tokens - (Number(b.prompt_tokens) || 0)),
+        completion_tokens: Math.max(0, d.completion_tokens - (Number(b.completion_tokens) || 0)),
+        cost: round(Math.max(0, d.cost - (Number(b.cost) || 0))),
+        providers: provs
+      };
+    });
+    const todayEntry = out.filter((d) => d.date === dayKey())[0]
+      || { date: dayKey(), calls: 0, prompt_tokens: 0, completion_tokens: 0, cost: 0, providers: [] };
+    return {
+      currency: 'CNY',
+      today: todayEntry,
+      days: out,
+      total: round(out.reduce((s, d) => s + d.cost, 0)),
+      reset: reset ? { at: reset.at, day: reset.day } : null,
+      note: '金额按 provider 的 price_in/price_out 估算，本地与免费模型记 0；多机共用同一个 key 时账本只算本机。'
+    };
   }
 
   ledgerAll(days) {

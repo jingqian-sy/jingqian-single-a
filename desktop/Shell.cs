@@ -774,6 +774,11 @@ namespace JingqianShell
         Button btnVoice;
         Button btnMic;
         bool recognizing;
+        // 模型快捷切换 + 今日账单（常驻工具栏右侧）
+        ComboBox modelBox;
+        Label costLabel;
+        bool routeFilling;
+        int toolRight;
 
         public MainForm(string repoRoot, string baseUrl, bool openSettings)
         {
@@ -916,8 +921,11 @@ namespace JingqianShell
                     SetOnline(api.Ping());
                     RefreshStats();
                 }
+                if (statTick % 4 == 0) RefreshCost();
             };
             statusTimer.Start();
+            LoadRoute();
+            RefreshCost();
         }
 
         void BuildUi()
@@ -963,6 +971,31 @@ namespace JingqianShell
             ToolBtn(toolPanel, ref tx, "记忆", false, delegate { OpenMemory(); });
             ToolBtn(toolPanel, ref tx, "设置", true, delegate { OpenSettings(); });
             btnVoice = ToolBtn(toolPanel, ref tx, "朗读", false, delegate { ToggleVoice(); });
+
+            // 模型快捷切换：下拉里点一下就换，不用进设置、不用重启服务
+            modelBox = new ComboBox();
+            modelBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            modelBox.FlatStyle = FlatStyle.Flat;
+            modelBox.Font = Theme.Ui(9f, false);
+            modelBox.BackColor = Color.White;
+            modelBox.ForeColor = Theme.Text;
+            modelBox.Items.Add("模型：读取中…");
+            modelBox.SelectedIndex = 0;
+            modelBox.SelectedIndexChanged += delegate { OnModelPicked(); };
+            toolPanel.Controls.Add(modelBox);
+
+            // 今日花费：常驻显示，点开是明细 + 重置
+            costLabel = new Label();
+            costLabel.AutoSize = false;
+            costLabel.TextAlign = ContentAlignment.MiddleCenter;
+            costLabel.Font = Theme.Ui(8.5f, true);
+            costLabel.ForeColor = Theme.AccentDeep;
+            costLabel.BackColor = Color.White;
+            costLabel.Text = "今日 —";
+            costLabel.Cursor = Cursors.Hand;
+            costLabel.Click += delegate { ShowCostDialog(); };
+            toolPanel.Controls.Add(costLabel);
+            toolRight = tx;
 
             dragHintLabel = new Label();
             dragHintLabel.AutoSize = false;
@@ -1160,8 +1193,25 @@ namespace JingqianShell
                 radarGoBtn.SetBounds(radarLaterBtn.Left - Dpi.X(8) - radarGoBtn.Width, Dpi.X(4), radarGoBtn.Width, Dpi.X(26));
                 radarLabel.SetBounds(Dpi.X(16), 0, Math.Max(Dpi.X(120), radarGoBtn.Left - Dpi.X(28)), Dpi.X(34));
             }
+            // 右侧先排「今日花费」和「模型下拉」，提示字夹在按钮和它们中间
+            int rightEdge = toolPanel.Width - Dpi.X(12);
+            if (costLabel != null)
+            {
+                costLabel.SetBounds(rightEdge - Dpi.X(92), Dpi.X(7), Dpi.X(92), Dpi.X(26));
+                rightEdge = costLabel.Left - Dpi.X(8);
+            }
+            if (modelBox != null)
+            {
+                modelBox.SetBounds(rightEdge - Dpi.X(172), Dpi.X(7), Dpi.X(172), Dpi.X(26));
+                rightEdge = modelBox.Left - Dpi.X(8);
+            }
             if (dragHintLabel != null)
-                dragHintLabel.SetBounds(toolPanel.Width - Dpi.X(196), 0, Dpi.X(184), toolPanel.Height);
+            {
+                int left = toolRight + Dpi.X(10);
+                int width = rightEdge - left - Dpi.X(4);
+                dragHintLabel.Visible = width > Dpi.X(110);
+                dragHintLabel.SetBounds(left, 0, Math.Max(0, width), toolPanel.Height);
+            }
         }
 
         void LayoutBottom()
@@ -1457,6 +1507,266 @@ namespace JingqianShell
                 statsLabel.Text = "数据栏：服务没接上（" + ex.Message + "）";
             }
             clockLabel.Text = DateTime.Now.ToString("HH:mm:ss");
+        }
+
+        // ===================== 模型快捷切换 =====================
+        class RouteOption
+        {
+            public string Label = "";
+            public string Pin = "";
+            public string Mode = "";
+            public bool Current;
+            public override string ToString() { return Label; }
+        }
+
+        void LoadRoute()
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate (object state)
+            {
+                Dictionary<string, object> j = null;
+                try { j = api.Get("/api/route", 5000); } catch { j = null; }
+                try { BeginInvoke((MethodInvoker)delegate { FillRouteCombo(j); }); } catch { }
+            });
+        }
+
+        void FillRouteCombo(Dictionary<string, object> j)
+        {
+            if (modelBox == null) return;
+            routeFilling = true;
+            try
+            {
+                modelBox.Items.Clear();
+                if (j == null)
+                {
+                    modelBox.Items.Add(new RouteOption { Label = "模型：服务没接上" });
+                    modelBox.SelectedIndex = 0;
+                    return;
+                }
+                string mode = "cheap-first";
+                List<string> order = new List<string>();
+                object ro;
+                if (j.TryGetValue("route", out ro) && ro is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> rd = (Dictionary<string, object>)ro;
+                    if (rd.ContainsKey("mode")) mode = Convert.ToString(rd["mode"]);
+                    object oo;
+                    if (rd.TryGetValue("order", out oo) && oo is object[])
+                        foreach (object x in (object[])oo) order.Add(Convert.ToString(x));
+                }
+                string pinned = (mode == "fixed" && order.Count > 0) ? order[0] : null;
+
+                RouteOption a1 = new RouteOption { Label = "自动：先免费 / 本地", Mode = "cheap-first", Current = pinned == null && mode == "cheap-first" };
+                RouteOption a2 = new RouteOption { Label = "自动：先云端", Mode = "cloud-first", Current = pinned == null && mode == "cloud-first" };
+                modelBox.Items.Add(a1);
+                modelBox.Items.Add(a2);
+
+                int current = a1.Current ? 0 : (a2.Current ? 1 : -1);
+                object pv;
+                if (j.TryGetValue("providers", out pv) && pv is object[])
+                {
+                    foreach (object o in (object[])pv)
+                    {
+                        Dictionary<string, object> d = o as Dictionary<string, object>;
+                        if (d == null || !d.ContainsKey("name")) continue;
+                        string name = Convert.ToString(d["name"]);
+                        bool free = d.ContainsKey("free") && Convert.ToBoolean(d["free"]);
+                        bool ready = d.ContainsKey("ready") && Convert.ToBoolean(d["ready"]);
+                        string label = name;
+                        if (d.ContainsKey("model")) label += "（" + Convert.ToString(d["model"]) + "）";
+                        if (free) label += " 免费";
+                        if (!ready) label += " · 未配置";
+                        RouteOption op = new RouteOption { Label = label, Pin = name, Current = pinned == name };
+                        modelBox.Items.Add(op);
+                        if (op.Current) current = modelBox.Items.Count - 1;
+                    }
+                }
+                modelBox.SelectedIndex = current >= 0 ? current : 0;
+            }
+            finally
+            {
+                routeFilling = false;
+            }
+        }
+
+        void OnModelPicked()
+        {
+            if (routeFilling || modelBox == null || modelBox.SelectedIndex < 0) return;
+            RouteOption opt = modelBox.SelectedItem as RouteOption;
+            if (opt == null) return;
+            if (opt.Pin.Length == 0 && opt.Mode.Length == 0) return;
+            if (opt.Current) return;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate (object state)
+            {
+                string err = null;
+                try
+                {
+                    Dictionary<string, object> body = new Dictionary<string, object>();
+                    if (opt.Pin.Length > 0) body["pin"] = opt.Pin;
+                    else body["mode"] = opt.Mode;
+                    Dictionary<string, object> r = api.Post("/api/route", body, 8000);
+                    if (r.ContainsKey("ok") && !Convert.ToBoolean(r["ok"])) err = Convert.ToString(r["error"]);
+                }
+                catch (Exception ex) { err = ex.Message; }
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        caption.StatusText = err == null ? ("已切到 " + opt.Label + "，下一轮就走它") : ("切换失败：" + err);
+                        caption.Invalidate();
+                        LoadRoute();
+                    });
+                }
+                catch { }
+            });
+        }
+
+        // ===================== 今日账单 =====================
+        void RefreshCost()
+        {
+            if (costLabel == null) return;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate (object state)
+            {
+                string text = "今日 —";
+                string tipText = "今天还没有调用";
+                try
+                {
+                    Dictionary<string, object> j = api.Get("/api/cost?days=7", 5000);
+                    double cost = 0;
+                    string calls = "0";
+                    object t;
+                    if (j.TryGetValue("today", out t) && t is Dictionary<string, object>)
+                    {
+                        Dictionary<string, object> td = (Dictionary<string, object>)t;
+                        if (td.ContainsKey("cost")) cost = Convert.ToDouble(td["cost"]);
+                        if (td.ContainsKey("calls")) calls = Convert.ToString(td["calls"]);
+                    }
+                    text = "今日 ¥" + cost.ToString("0.000");
+                    double total = 0;
+                    if (j.ContainsKey("total")) total = Convert.ToDouble(j["total"]);
+                    tipText = "今天调用 " + calls + " 次 · 今日 ¥" + cost.ToString("0.000")
+                        + " · 近 7 天 ¥" + total.ToString("0.000") + "（点开看明细和重置）";
+                }
+                catch { text = "今日 —"; }
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (costLabel == null) return;
+                        costLabel.Text = text;
+                        tip.SetToolTip(costLabel, tipText);
+                        costLabel.Invalidate();
+                    });
+                }
+                catch { }
+            });
+        }
+
+        void ShowCostDialog()
+        {
+            Dictionary<string, object> j = null;
+            try { j = api.Get("/api/cost?days=7", 5000); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "服务没接上，账单读不到：" + ex.Message, "今日账单", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            using (Form f = MakeCostForm(j)) f.ShowDialog(this);
+            RefreshCost();
+        }
+
+        internal Form MakeCostForm(Dictionary<string, object> j)
+        {
+            double todayCost = 0, total = 0;
+            string calls = "0", resetAt = "";
+            List<string> rows = new List<string>();
+            object t;
+            if (j.TryGetValue("today", out t) && t is Dictionary<string, object>)
+            {
+                Dictionary<string, object> td = (Dictionary<string, object>)t;
+                if (td.ContainsKey("cost")) todayCost = Convert.ToDouble(td["cost"]);
+                if (td.ContainsKey("calls")) calls = Convert.ToString(td["calls"]);
+                object pv;
+                if (td.TryGetValue("providers", out pv) && pv is object[])
+                {
+                    foreach (object o in (object[])pv)
+                    {
+                        Dictionary<string, object> d = o as Dictionary<string, object>;
+                        if (d == null || !d.ContainsKey("name")) continue;
+                        double pc = d.ContainsKey("cost") ? Convert.ToDouble(d["cost"]) : 0;
+                        string cl = d.ContainsKey("calls") ? Convert.ToString(d["calls"]) : "0";
+                        rows.Add(Convert.ToString(d["name"]) + " · " + cl + " 次 · ¥" + pc.ToString("0.000"));
+                    }
+                }
+            }
+            if (j.ContainsKey("total")) total = Convert.ToDouble(j["total"]);
+            object rr;
+            if (j.TryGetValue("reset", out rr) && rr is Dictionary<string, object>)
+            {
+                Dictionary<string, object> rd = (Dictionary<string, object>)rr;
+                if (rd.ContainsKey("at")) resetAt = Convert.ToString(rd["at"]).Replace('T', ' ');
+                if (resetAt.Length > 16) resetAt = resetAt.Substring(0, 16);
+            }
+            if (rows.Count == 0) rows.Add("今天还没有调用");
+
+            Form f = new Form();
+            {
+                f.Text = "今日账单";
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.StartPosition = FormStartPosition.CenterParent;
+                f.MinimizeBox = false;
+                f.MaximizeBox = false;
+                f.ShowInTaskbar = false;
+                f.Font = Theme.Ui(9f, false);
+                f.BackColor = Theme.Paper;
+                f.ClientSize = new Size(Dpi.X(340), Dpi.X(300));
+
+                Label head = new Label();
+                head.Text = "今日 ¥" + todayCost.ToString("0.000");
+                head.Font = Theme.Ui(13f, true);
+                head.ForeColor = Theme.AccentDeep;
+                head.SetBounds(Dpi.X(18), Dpi.X(14), Dpi.X(304), Dpi.X(30));
+                f.Controls.Add(head);
+
+                Label body = new Label();
+                body.Text = string.Join("\n", rows.ToArray())
+                    + "\n\n近 7 天合计 ¥" + total.ToString("0.000")
+                    + (resetAt.Length > 0 ? "\n上次重置：" + resetAt + "（只从那时起算）" : "");
+                body.SetBounds(Dpi.X(18), Dpi.X(50), Dpi.X(304), Dpi.X(150));
+                f.Controls.Add(body);
+
+                Label note = new Label();
+                note.Text = "金额按提供方单价估算；本地与免费模型记 0。重置不清账本，只是从现在重新累计。";
+                note.ForeColor = Theme.Dim;
+                note.Font = Theme.Ui(8f, false);
+                note.SetBounds(Dpi.X(18), Dpi.X(196), Dpi.X(304), Dpi.X(46));
+                f.Controls.Add(note);
+
+                Button rb = MakeButton("重置今日", Color.White, Color.FromArgb(168, 66, 66));
+                rb.SetBounds(Dpi.X(18), Dpi.X(250), Dpi.X(96), Dpi.X(30));
+                rb.Click += delegate
+                {
+                    if (MessageBox.Show(f, "把今日显示的金额归零？原始账本不会删，只是从现在重新算。", "重置账单",
+                        MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+                    string err = null;
+                    try
+                    {
+                        Dictionary<string, object> req = new Dictionary<string, object>();
+                        Dictionary<string, object> r = api.Post("/api/cost/reset", req, 8000);
+                        if (r.ContainsKey("ok") && !Convert.ToBoolean(r["ok"])) err = Convert.ToString(r["error"]);
+                    }
+                    catch (Exception ex) { err = ex.Message; }
+                    if (err != null) MessageBox.Show(f, "重置失败：" + err, "重置账单", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    else { f.DialogResult = DialogResult.OK; f.Close(); }
+                };
+                f.Controls.Add(rb);
+
+                Button cb = MakeButton("关闭", Color.White, Theme.AccentDeep);
+                cb.SetBounds(Dpi.X(226), Dpi.X(250), Dpi.X(96), Dpi.X(30));
+                cb.Click += delegate { f.Close(); };
+                f.Controls.Add(cb);
+
+                return f;
+            }
         }
 
         Button MakeButton(string text, Color back, Color fore)
@@ -3730,6 +4040,35 @@ namespace JingqianShell
                 }
             }
             catch (Exception ex) { Console.WriteLine("MEMORY SHOT FAIL " + ex.Message); }
+            try
+            {
+                using (MainForm mf = new MainForm(repo, baseUrl, false))
+                {
+                    mf.StartPosition = FormStartPosition.Manual;
+                    mf.Location = new Point(-30000, -30000);
+                    mf.ShowInTaskbar = false;
+                    mf.Show();
+                    Application.DoEvents();
+                    Thread.Sleep(400);
+                    Application.DoEvents();
+                    Shot(mf, Path.Combine(repo, "data", "_ui_main.png"));
+                    Dictionary<string, object> cost = api.Get("/api/cost?days=7", 5000);
+                    using (Form cf = mf.MakeCostForm(cost))
+                    {
+                        cf.StartPosition = FormStartPosition.Manual;
+                        cf.Location = new Point(-30000, -30000);
+                        cf.ShowInTaskbar = false;
+                        cf.Show();
+                        Application.DoEvents();
+                        Thread.Sleep(300);
+                        Application.DoEvents();
+                        Shot(cf, Path.Combine(repo, "data", "_ui_cost.png"));
+                        cf.Hide();
+                    }
+                    mf.Hide();
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("COST SHOT FAIL " + ex.Message); }
             return 0;
         }
 

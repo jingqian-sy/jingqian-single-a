@@ -227,6 +227,7 @@ async function main() {
     await stepAsync('19. 拖文件附件（文本读入 / 二进制跳过 / 图片多模态 / 非视觉说实话）', () => node([path.join(__dirname, 'attach-test.js')]));
     await stepAsync('20. 插件版 MCP（真按 stdio 协议：initialize / tools/list / 四个工具 / 出错不崩）', () => node([path.join(__dirname, 'mcp-test.js')]));
     await stepAsync('21. 迁移来的功能工具（触手/说话/子智能体：开关、红线、未知动作）', () => node([path.join(__dirname, 'extras-test.js')]));
+    await stepAsync('22. 模型快捷切换 + 今日账单（/api/route 热切 / /api/cost / 重置只打水位）', () => node([path.join(__dirname, 'route-cost-test.js')]));
 
     console.log('\n全部通过，用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
   } catch (e) {
