@@ -133,7 +133,8 @@
   "budget": {
     "perCallSeconds": 120,
     "perTaskSeconds": 180,
-    "perTaskTokens": 200000
+    "perTaskTokens": 200000,
+    "dailyCostCapCNY": 2
   },
   "temperature": 0.7,
   "persona": "",

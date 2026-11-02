@@ -590,6 +590,20 @@ class Her {
       const claims = /(\d{1,2}\s*月|[一二三四五六七八九十]{1,2}\s*月|\d{1,2}\s*号|\d{4}\s*年|生日(是|在|那)|名字(是|叫)|你(之前|上次|以前)?(说过|喜欢|爱喝|爱吃|讨厌|住))/.test(reply);
       if (claims && !saidBefore) reply = '这个我没记着，你直接告诉我吧，我记住了以后就不会忘。';
     }
+    // 今日花费上限：超了提醒一次（每天只提一次），让她自己心里有数
+    const cap = Number((this.cfg.budget || {}).dailyCostCapCNY) || 0;
+    if (cap > 0) {
+      const todayLedger = this.router.today();
+      const spent = Number((todayLedger.total || {}).cost) || 0;
+      if (spent > cap) {
+        const flagFile = path.join(this.dataDir, 'budget-warned.json');
+        const flag = readJson(flagFile, {});
+        if (flag.day !== todayLedger.date) {
+          writeJson(flagFile, { day: todayLedger.date, at: nowIso(), spent: Math.round(spent * 1e6) / 1e6 });
+          reply += '\n（今天已经花到 ¥' + spent.toFixed(3) + '，超过你设的 ¥' + cap + ' 了，我先尽量用本地的。）';
+        }
+      }
+    }
     const h = this.loadHistory(sessionId);
     h.messages.push({ role: 'user', content: displayText }, { role: 'assistant', content: reply });
     this.saveHistory(sessionId, h);
