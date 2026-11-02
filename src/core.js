@@ -32,6 +32,8 @@ const DEFAULT_PERSONA = [
   '你能读写工作目录里的文件、跑白名单里的命令、记事和查事，但破坏性操作要先问。',
   '硬规矩：说「做好了」之前必须真的调用过工具并看过返回值；没调用就不许说完成，做不到了就直说做不到。',
   '不知道的事就说不确定，不许编文件内容、不许编数字。',
+  '关于他的名字、生日、喜好、住址这类事：记忆里没有就直说「这个我没记着」，'
+    + '绝对不许拿今天的日期、猜的数字或你自己的信息顶上——编出来的生日比不知道更糟。',
   '人称要清楚：他说「我」指的是他自己，你回他用「你」；只有你自己的事才用「我」。',
   '他打「我喜欢什么」是在说他自己；问「你知道我喜欢什么吗」是考你记不记得他的事，不是问你自己喜欢什么。',
   '他问关于他自己的事（名字、喜好、生日、习惯、住哪）时，先用记忆里关于他的那些回答；没记着就说没记着，'
@@ -56,11 +58,15 @@ function toUserFact(text) {
 const CAPTURE = /记住|别忘|记一下|我叫|我的名字|我喜欢|我讨厌|我不喜欢|生日是|我的生日|约定|以后都|从现在开始/;
 
 // 他在问关于他自己的事吗（这类问句小模型最容易答成它自己）
+// 注意：得是「问」才算。「记住：我喜欢…」是在告诉我事，不能当成问句。
 function askingAboutHimself(text) {
   const t = String(text || '').trim();
+  if (/^(记住|记一下|帮我记|记着|别忘|提醒我)/.test(t)) return false;
+  const isQuestion = /[?？]\s*$/.test(t) || /(吗|呢)\s*$/.test(t) || /什么|啥|哪些|哪一样|哪个/.test(t);
+  if (!isQuestion) return false;
   return /^(我(叫|的名字|是谁|几岁|住哪)|我(叫什么名字|的名字是什么))/.test(t)
     || /我(叫什么|的名字|是谁|生日|几岁)/.test(t)
-    || /我(喜欢|爱|讨厌|爱吃|爱喝|不吃|不喝)(什么|啥|哪些)?/.test(t)
+    || /我(喜欢|爱|讨厌|爱吃|爱喝|不吃|不喝)/.test(t)
     || /^你知道我/.test(t)
     || /^你(还)?记得我/.test(t);
 }
@@ -261,12 +267,17 @@ class Her {
     }
     const ev = this.events.block(5);
     if (ev) parts.push('【事件时间轴】\n' + forPrompt(ev));
+    // 小模型最容易在这一类问句上翻车（把「我」当成它自己，或者编个生日糊弄）。
+    // 光写系统规则它记不住，就在问题前面直接点一句；记忆里没有就明说只能回答没记着。
+    const askedAboutHim = askingAboutHimself(userText);
+    let asked = '';
+    if (askedAboutHim) {
+      const hisCount = ((recallRes && recallRes.hits) || []).filter((h) => kindOf(h.text) === 'his').length;
+      asked = hisCount
+        ? '（他这句话是在问他自己：用记忆里关于他的事回答，称呼他用「你」；不许用你自己的名字、喜好或身份来顶）\n'
+        : '（他这句话是在问他自己，但记忆里没有这条。你只能老实说「这个我没记着」，不许猜日期、名字、喜好，也不许编）\n';
+    }
     const userContent = parts.length ? parts.join('\n\n') + '\n\n【这次的话】\n' + userText : userText;
-    // 小模型最容易在这一类问句上翻车（把「我」当成它自己）。
-    // 光写系统规则它记不住，就在问题前面直接点一句。
-    const asked = askingAboutHimself(userText)
-      ? '（他这句话是在问他自己：用记忆里关于他的事回答，称呼他用「你」；不许用你自己的名字、喜好或身份来顶）\n'
-      : '';
     return [{ role: 'system', content: this.cfg.persona || DEFAULT_PERSONA }]
       .concat(history.messages)
       .concat([{ role: 'user', content: asked + userContent }]);
@@ -490,7 +501,20 @@ class Her {
     }
     this._selfFix = false;
 
-    const reply = lastText || '（这轮没出结论，要不再说一次？）';
+    // 兜底：他问自己的事、记忆里又没有，而回答里蹦出了日期/数字/名字 → 这就是编的，直接换成实话。
+    // 小模型经常不听提示，只能在这一层挡一下。
+    let reply = lastText || '（这轮没出结论，要不再说一次？）';
+    const hisHits = (recallRes.hits || []).filter((x) => kindOf(x.text) === 'his');
+    if (askingAboutHimself(text) && hisHits.length === 0 && reply.length > 0) {
+      // 他这句话问的那个话题，之前的对话里他自己说过没有
+      const hist = this.loadHistory(sessionId);
+      const histText = (hist.messages || []).filter((m) => m && m.role === 'user').map((m) => String(m.content || '')).join(' ');
+      const topics = ['生日', '名字', '喜欢', '讨厌', '住'];
+      const topic = topics.filter((w) => text.indexOf(w) >= 0)[0] || '';
+      const saidBefore = topic.length > 0 && histText.indexOf(topic) >= 0;
+      const claims = /(\d{1,2}\s*月|[一二三四五六七八九十]{1,2}\s*月|\d{1,2}\s*号|\d{4}\s*年|生日(是|在|那)|名字(是|叫)|你(之前|上次|以前)?(说过|喜欢|爱喝|爱吃|讨厌|住))/.test(reply);
+      if (claims && !saidBefore) reply = '这个我没记着，你直接告诉我吧，我记住了以后就不会忘。';
+    }
     const h = this.loadHistory(sessionId);
     h.messages.push({ role: 'user', content: displayText }, { role: 'assistant', content: reply });
     this.saveHistory(sessionId, h);
