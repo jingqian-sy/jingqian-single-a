@@ -56,7 +56,7 @@
     }
   ],
   "route": {
-    "mode": "cheap-first",
+    "mode": "cloud-first",
     "order": [
       "zhipu",
       "deepseek",
