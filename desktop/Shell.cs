@@ -397,6 +397,9 @@ namespace JingqianShell
         public Image EmptyIcon;
         int contentHeight = 0;
         readonly List<int[]> tops = new List<int[]>();
+        int selected = -1;          // 当前选中的气泡（点一下选中，Ctrl+C 或右键复制）
+        ContextMenuStrip menu;
+        public string LastCopied = "";
 
         int Pad { get { return Dpi.X(18); } }
         int Radius { get { return Dpi.X(13); } }
@@ -407,9 +410,107 @@ namespace JingqianShell
         public ChatView()
         {
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+            SetStyle(ControlStyles.Selectable, true);
+            TabStop = false;
             AutoScroll = true;
             BackColor = Theme.Bg;
             Padding = new Padding(0);
+
+            // 气泡是自绘的，系统拿不到里面的文字；这里给一个自己的复制入口
+            menu = new ContextMenuStrip();
+            menu.Font = Theme.Ui(9f, false);
+            ToolStripMenuItem copyOne = new ToolStripMenuItem("复制这条");
+            copyOne.Click += delegate { CopySelected(); };
+            ToolStripMenuItem copyAll = new ToolStripMenuItem("复制全部对话");
+            copyAll.Click += delegate { CopyAll(); };
+            menu.Items.Add(copyOne);
+            menu.Items.Add(copyAll);
+            menu.Opening += delegate (object s, System.ComponentModel.CancelEventArgs e)
+            {
+                bool has = selected >= 0 && selected < msgs.Count;
+                copyOne.Enabled = has;
+                copyAll.Enabled = msgs.Count > 0;
+            };
+        }
+
+        // 点在哪个气泡上（content 坐标 = 鼠标 y - 滚动量）
+        int HitTest(Point p)
+        {
+            int cy = p.Y - AutoScrollPosition.Y;
+            for (int i = 0; i < tops.Count && i < msgs.Count; i++)
+            {
+                int top = tops[i][0], h = tops[i][1];
+                if (cy >= top && cy <= top + h) return i;
+            }
+            return -1;
+        }
+
+        string One(Msg m)
+        {
+            string who = m.Kind == "user" ? "你" : (m.Kind == "note" ? "" : "鲸倩");
+            string t = (m.Files != null && m.Files.Length > 0) ? ("[附件：" + m.Files + "] " + m.Text) : m.Text;
+            if (m.Kind == "note") return t;
+            return who + "：" + t;
+        }
+
+        void CopySelected()
+        {
+            if (selected < 0 || selected >= msgs.Count) return;
+            LastCopied = One(msgs[selected]);
+            try { Clipboard.SetText(LastCopied); } catch { }
+        }
+
+        void CopyAll()
+        {
+            List<string> lines = new List<string>();
+            foreach (Msg m in msgs) if (m.Kind != "pending") lines.Add(One(m));
+            LastCopied = string.Join("\n", lines.ToArray());
+            try { Clipboard.SetText(LastCopied); } catch { }
+        }
+
+        // 自检用：选中第 i 条并复制，返回复制到的文字（不弹菜单，不吵人）
+        public string CopyIndexForTest(int i)
+        {
+            if (i < 0 || i >= msgs.Count) return "";
+            selected = i;
+            CopySelected();
+            Invalidate();
+            return LastCopied;
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            int hit = HitTest(e.Location);
+            if (e.Button == MouseButtons.Right)
+            {
+                selected = hit;
+                Invalidate();
+                if (hit >= 0) menu.Show(this, e.Location);
+                return;
+            }
+            Focus();
+            if (selected != hit) { selected = hit; Invalidate(); }
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.Control && e.KeyCode == Keys.C)
+            {
+                if (selected >= 0) CopySelected(); else CopyAll();
+                e.SuppressKeyPress = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.A)
+            {
+                CopyAll();
+                e.SuppressKeyPress = true;
+            }
+            else if (e.KeyCode == Keys.Escape && selected >= 0)
+            {
+                selected = -1;
+                Invalidate();
+            }
         }
 
         public void Add(bool user, string text)
@@ -463,7 +564,7 @@ namespace JingqianShell
             Invalidate();
         }
 
-        public void Clear() { msgs.Clear(); Reflow(); Invalidate(); }
+        public void Clear() { msgs.Clear(); selected = -1; Reflow(); Invalidate(); }
 
         void ScrollToEnd()
         {
@@ -533,11 +634,12 @@ namespace JingqianShell
             // WinForms 的 AutoScrollPosition getter 返回负的滚动量（往下滚 = 负数），
             // 所以要「加上」它才是内容在视口里的 y。
             int y = Dpi.X(16) + AutoScrollPosition.Y;
-            foreach (Msg m in msgs)
+            for (int idx = 0; idx < msgs.Count; idx++)
             {
+                Msg m = msgs[idx];
                 if (m.Kind == "note")
                 {
-                    DrawNote(g, m, y);
+                    DrawNote(g, m, y, idx == selected);
                     y += Dpi.X(36);
                     continue;
                 }
@@ -577,11 +679,19 @@ namespace JingqianShell
                 Rectangle tr = new Rectangle(innerX, textTop, innerW, bh - (textTop - bubbleTop) - Dpi.X(12));
                 TextRenderer.DrawText(g, m.Text, font, tr, m.Kind == "pending" ? Theme.Dim : Theme.Text,
                     TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
+
+                // 选中的气泡描一圈，告诉人「复制的是这条」
+                if (idx == selected)
+                {
+                    Rectangle hi = new Rectangle(rr.X - 2, rr.Y - 2, rr.Width + 4, rr.Height + 4);
+                    using (GraphicsPath hp = Theme.Round(hi, Radius + 2))
+                    using (Pen p = new Pen(Theme.Accent, 2f)) g.DrawPath(p, hp);
+                }
                 y += LabelH + bh + Gap;
             }
         }
 
-        void DrawNote(Graphics g, Msg m, int y)
+        void DrawNote(Graphics g, Msg m, int y, bool hi)
         {
             Size sz = TextRenderer.MeasureText(m.Text, noteFont,
                 new Size(Math.Max(Dpi.X(120), ClientSize.Width - Dpi.X(80)), int.MaxValue), TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
@@ -592,6 +702,10 @@ namespace JingqianShell
             using (GraphicsPath gp = Theme.Round(rr, Dpi.X(9)))
             {
                 using (SolidBrush b = new SolidBrush(Color.FromArgb(236, 243, 249))) g.FillPath(b, gp);
+                if (hi)
+                {
+                    using (Pen p = new Pen(Theme.Accent, 2f)) g.DrawPath(p, gp);
+                }
             }
             TextRenderer.DrawText(g, m.Text, noteFont, rr, Theme.Dim,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
@@ -2082,6 +2196,12 @@ namespace JingqianShell
 
         // 同步把历史铺进气泡（返回铺了几条）；先 web（网页/软件版共用这个 session），
         // 没有再看 desktop（老版本软件版留下的），保证「服务里有对话，窗口就能看见」。
+        // 自检用：选中第 i 条并复制
+        public string CopyBubbleForTest(int i)
+        {
+            return chatView == null ? "" : chatView.CopyIndexForTest(i);
+        }
+
         public int LoadHistoryNow()
         {
             if (chatView != null && chatView.Count > 0) return chatView.Count;  // 已经铺过就别重复铺
@@ -3905,6 +4025,18 @@ namespace JingqianShell
                         }
                         catch (Exception ex) { Console.WriteLine("HISTORY FAIL " + ex.Message); fail++; }
                         string png = Path.Combine(repo, "desktop", "_verify-window.png");
+                        // 选中 + 复制：气泡是自绘的，这里验的是「点选/Ctrl+C 走的那条路」真把字送进剪贴板
+                        try
+                        {
+                            string copied = f.CopyBubbleForTest(0);
+                            string clip = "";
+                            try { clip = Clipboard.GetText(); } catch { }
+                            bool copyOk = copied.Length > 0 && clip.Length > 0
+                                && clip.IndexOf(copied.Substring(0, Math.Min(6, copied.Length))) >= 0;
+                            Console.WriteLine("COPY " + (copyOk ? "OK" : "FAIL") + " chars=" + copied.Length + " clipboard=" + clip.Length);
+                            if (!copyOk) fail++;
+                        }
+                        catch (Exception ex) { Console.WriteLine("COPY FAIL " + ex.Message); fail++; }
                         try
                         {
                             using (Bitmap bmp = new Bitmap(f.Width, f.Height))
