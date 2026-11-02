@@ -67,7 +67,11 @@ const TOOL_BASE = {
   run_command: 'P3',
   remember: 'P3',
   recall: 'P3',
-  remind: 'P3'
+  remind: 'P3',
+  tentacle: 'P3',
+  speak: 'P3',
+  local_ask: 'P3',
+  sub_agent: 'P3'
 };
 
 const ORDER = { P0: 0, P1: 1, P2: 2, P3: 3 };
@@ -90,9 +94,17 @@ function classify(tool, args, ctx) {
     if (re.test(blob)) { level = worse(level, 'P1'); if (reason === '普通操作') reason = '会删改或覆盖已有内容（' + re.source + '）'; }
   }
 
+  // 触手：会动系统/浏览器的动作至少 P1（先给用户看要干什么，点头才动）
+  if (tool === 'tentacle' && args) {
+    const act = String(args.action || '').toLowerCase();
+    if (['click', 'type', 'key', 'web_click', 'web_type', 'web_eval'].indexOf(act) >= 0) {
+      level = worse(level, 'P1');
+      reason = '触手要动手：' + act + (args.target ? ' → ' + String(args.target).slice(0, 40) : '');
+    }
+  }
+
   // 写文件覆盖已存在文件 → P1
-  if (tool === 'write_file' && args && args.path) {
-    try {
+  if (tool === 'write_file' && args && args.path) {    try {
       const root = (ctx && ctx.workspace) || process.cwd();
       const abs = path.resolve(root, String(args.path));
       let inside = abs === root || abs.startsWith(root + path.sep);

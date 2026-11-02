@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const safety = require('../safety');
 const sandbox = require('../sandbox');
+const extras = require('./extras');
 const { readJson, writeJson, ensureDir, truncate, nowIso } = require('../util');
 
 function safeResolve(root, p) {
@@ -135,9 +136,11 @@ const DEFS = [
   }
 ];
 
+const ALL_DEFS = DEFS.concat(extras.DEFS);
+
 class Tools {
   constructor(ctx) {
-    this.ctx = ctx; // { cfg, workspace, store, events, audit, dataDir }
+    this.ctx = ctx; // { cfg, workspace, store, events, audit, dataDir, configPath, subAgent }
     this.remindFile = path.join(ctx.dataDir, 'reminders.json');
     this.pending = null;
   }
@@ -145,8 +148,12 @@ class Tools {
   defs() {
     const cfg = this.ctx.cfg || {};
     const allowed = (cfg.tools && cfg.tools.names) || null;
-    if (!allowed) return DEFS;
-    return DEFS.filter((d) => allowed.includes(d.function.name));
+    const base = allowed ? ALL_DEFS.filter((d) => allowed.includes(d.function.name)) : ALL_DEFS;
+    return base.filter((d) => {
+      const feat = extras.FEATURE_OF[d.function.name];
+      const f = cfg.features || {};
+      return !feat || f[feat] !== false;
+    });
   }
 
   async run(name, args, opts) {
@@ -170,6 +177,9 @@ class Tools {
     this.pending = null;
 
     try {
+      if (extras.NAMES.has(name)) {
+        return await extras.run(name, args, Object.assign({}, ctx, { confirmed, configPath: ctx.configPath }));
+      }
       switch (name) {
         case 'read_file': return this.readFile(args);
         case 'write_file': return this.writeFile(args);

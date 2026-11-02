@@ -1969,7 +1969,7 @@ namespace JingqianShell
         FlatBtn btnApplyKey;
         Label lblQQStatus;
         Panel headerPanel, contentPanel, footerPanel;
-        FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnPersona, btnVoiceNav, btnRefreshStats, btnTestModel;
+        FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnPersona, btnVoiceNav, btnFeatureNav, btnRefreshStats, btnTestModel;
         FlatBtn btnTestProv, btnSpeakTest;
         TextBox txtPersona;
         FlatBtn btnResetPersona;
@@ -1978,6 +1978,9 @@ namespace JingqianShell
         ComboBox cmbVoice;
         TrackBar trkRate;
         Label lblRate;
+        CheckBox chkTentacle, chkSubagent, chkSpeakFeature, chkVisionFeature, chkEventsFeature;
+        FlatBtn btnCheckUpdate;
+        Label lblUpdate;
         Label lblStatus, lblTestResult;
         ComboBox cmbRouteMode;
         TextBox txtRouteOrder, txtMaxSteps, txtTopK, txtMaxHistory;
@@ -2054,6 +2057,11 @@ namespace JingqianShell
             btnVoiceNav.Click += delegate { ScrollToVoice(); };
             headerPanel.Controls.Add(btnVoiceNav);
 
+            btnFeatureNav = new FlatBtn("功能", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
+            btnFeatureNav.Font = Theme.Ui(8.5f, true);
+            btnFeatureNav.Click += delegate { ScrollToFeatures(); };
+            headerPanel.Controls.Add(btnFeatureNav);
+
             footerPanel = new Panel();
             footerPanel.Dock = DockStyle.Bottom;
             footerPanel.Height = Dpi.X(58);
@@ -2083,7 +2091,7 @@ namespace JingqianShell
             contentPanel.BringToFront();
 
             BuildUi();
-            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(1740));
+            contentPanel.AutoScrollMinSize = new Size(0, Dpi.X(2040));
             LayoutChrome();
             LoadConfig();
             ApplyRound();
@@ -2108,6 +2116,7 @@ namespace JingqianShell
                 {
                     btnPersona.SetBounds(btnConsole.Left - Dpi.X(6) - Dpi.X(64), Dpi.X(9), Dpi.X(64), Dpi.X(28));
                     if (btnVoiceNav != null) btnVoiceNav.SetBounds(btnPersona.Left - Dpi.X(6) - Dpi.X(64), Dpi.X(9), Dpi.X(64), Dpi.X(28));
+                    if (btnFeatureNav != null) btnFeatureNav.SetBounds(btnVoiceNav.Left - Dpi.X(6) - Dpi.X(64), Dpi.X(9), Dpi.X(64), Dpi.X(28));
                 }
             }
             if (btnSave != null)
@@ -2405,6 +2414,82 @@ namespace JingqianShell
             contentPanel.Controls.Add(lblRate);
 
             Hint("聊天框右边「说话」按钮：点一下，说完停一下，识别结果会填进输入框（先看一眼再发送）。", 14, 1640);
+
+            // ---------- 功能开关（从私有版迁过来的几个能力） ----------
+            Section("功能开关", 14, 1700);
+            Hint("关掉哪项，她工具箱里就没有那个工具；改了要保存并重启服务。", 14, 1728);
+
+            chkTentacle = FeatureCheck("触手：看屏幕、点按打字、操作受控浏览器", 14, 1764);
+            chkSubagent = FeatureCheck("子智能体：能派一个独立分身去干活", 14, 1792);
+            chkSpeakFeature = FeatureCheck("开口说话：她可以主动念一句（系统语音）", 14, 1820);
+            chkVisionFeature = FeatureCheck("看图：拖进来的图片交给视觉模型", 14, 1848);
+            chkEventsFeature = FeatureCheck("事件时间轴：把零散的话串成事", 14, 1876);
+
+            Hint("这些能力原来在私有版里，现在搬到开源版；触手脚本在 tools/tentacle/，动作脚本会先画圈再动手。", 14, 1916);
+
+            btnCheckUpdate = SmallBtn("检查更新", 14, 1952, 96, false);
+            btnCheckUpdate.Click += delegate { CheckUpdate(); };
+            lblUpdate = new Label();
+            lblUpdate.AutoSize = false;
+            lblUpdate.Font = Theme.Ui(8.5f, false);
+            lblUpdate.ForeColor = Theme.Dim;
+            lblUpdate.SetBounds(Dpi.X(122), Dpi.X(1958), Dpi.X(500), Dpi.X(24));
+            lblUpdate.Text = "点一下看看有没有新版本（读 config.update.manifestUrl）";
+            contentPanel.Controls.Add(lblUpdate);
+        }
+
+        void CheckUpdate()
+        {
+            if (lblUpdate == null) return;
+            lblUpdate.ForeColor = Theme.Dim;
+            lblUpdate.Text = "正在查…";
+            Application.DoEvents();
+            try
+            {
+                Dictionary<string, object> r = api.Get("/api/update/check", 20000);
+                if (!r.ContainsKey("ok") || !Convert.ToBoolean(r["ok"]))
+                {
+                    lblUpdate.Text = "查不了：" + (r.ContainsKey("error") ? Convert.ToString(r["error"]) : "未知原因");
+                    lblUpdate.ForeColor = Theme.Warn;
+                    return;
+                }
+                string cur = r.ContainsKey("current") ? Convert.ToString(r["current"]) : "?";
+                string latest = r.ContainsKey("latest") ? Convert.ToString(r["latest"]) : "?";
+                bool newer = r.ContainsKey("newer") && Convert.ToBoolean(r["newer"]);
+                string url = r.ContainsKey("url") ? Convert.ToString(r["url"]) : "";
+                if (!newer)
+                {
+                    lblUpdate.Text = "已经是最新（" + cur + "）";
+                    lblUpdate.ForeColor = Color.FromArgb(60, 150, 100);
+                    return;
+                }
+                lblUpdate.Text = "有新版本 " + latest + "（当前 " + cur + "）" + (url.Length > 0 ? "，已打开下载页" : "");
+                lblUpdate.ForeColor = Theme.AccentDeep;
+                if (url.Length > 0) Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                lblUpdate.Text = "检查失败：" + ex.Message;
+                lblUpdate.ForeColor = Theme.Warn;
+            }
+        }
+
+        CheckBox FeatureCheck(string text, int x, int y)
+        {
+            CheckBox c = new CheckBox();
+            c.Text = text;
+            c.Font = Theme.Ui(9.5f, false);
+            c.ForeColor = Theme.Text;
+            c.SetBounds(Dpi.X(x), Dpi.X(y), Dpi.X(560), Dpi.X(24));
+            contentPanel.Controls.Add(c);
+            return c;
+        }
+
+        void ScrollToFeatures()
+        {
+            if (contentPanel == null || chkTentacle == null) return;
+            contentPanel.AutoScrollPosition = new Point(0, chkTentacle.Top);
+            contentPanel.Invalidate();
         }
 
         void PreviewVoice()
@@ -2799,6 +2884,22 @@ namespace JingqianShell
                 catch { }
                 trkRate.Value = Math.Max(-10, Math.Min(10, vRate));
                 if (lblRate != null) lblRate.Text = trkRate.Value.ToString();
+                // 功能开关
+                bool fTentacle = true, fSub = true, fSpk = true, fVis = true, fEv = true;
+                if (cfg.TryGetValue("features", out sub) && sub is Dictionary<string, object>)
+                {
+                    Dictionary<string, object> fd = (Dictionary<string, object>)sub;
+                    if (fd.ContainsKey("tentacle")) fTentacle = Convert.ToBoolean(fd["tentacle"]);
+                    if (fd.ContainsKey("subagent")) fSub = Convert.ToBoolean(fd["subagent"]);
+                    if (fd.ContainsKey("speak")) fSpk = Convert.ToBoolean(fd["speak"]);
+                    if (fd.ContainsKey("vision")) fVis = Convert.ToBoolean(fd["vision"]);
+                    if (fd.ContainsKey("events")) fEv = Convert.ToBoolean(fd["events"]);
+                }
+                chkTentacle.Checked = fTentacle;
+                chkSubagent.Checked = fSub;
+                chkSpeakFeature.Checked = fSpk;
+                chkVisionFeature.Checked = fVis;
+                chkEventsFeature.Checked = fEv;
                 RefreshStats();
             }
             catch (Exception ex)
@@ -3085,6 +3186,13 @@ namespace JingqianShell
                 vb["voice"] = (cmbVoice.SelectedItem != null) ? cmbVoice.SelectedItem.ToString().Split('|')[0].Trim() : "";
                 vb["rate"] = trkRate.Value;
                 body["voice"] = vb;
+                Dictionary<string, object> fb = new Dictionary<string, object>();
+                fb["tentacle"] = chkTentacle.Checked;
+                fb["subagent"] = chkSubagent.Checked;
+                fb["speak"] = chkSpeakFeature.Checked;
+                fb["vision"] = chkVisionFeature.Checked;
+                fb["events"] = chkEventsFeature.Checked;
+                body["features"] = fb;
                 Dictionary<string, object> qb = new Dictionary<string, object>();
                 qb["enabled"] = qqConnected;
                 qb["gateway"] = (qqGateway.Length > 0 ? qqGateway : txtQQUrl.Text.Trim());

@@ -80,6 +80,12 @@ class Her {
     });
     this.pending = null;
     this.idleTimer = null;
+    // 从私有版迁来的功能类工具要用的上下文：配置文件位置、子智能体回调
+    this.tools.ctx.configPath = process.env.JQ_CONFIG
+      ? path.resolve(this.root, process.env.JQ_CONFIG)
+      : path.join(this.root, 'config.json');
+    this.tools.ctx.subAgent = (task, model) => this.runSubAgent(task, model);
+    this._subRunning = false;
   }
 
   embedFn() {
@@ -245,6 +251,49 @@ class Her {
     if (!text) return null;
     const it = this.store.add({ text: toUserFact(text), kind: 'fact', importance: pinned ? 3 : 2, pinned, source: 'auto-capture' });
     return it;
+  }
+
+  // 子智能体：一轮独立任务（自己调工具、最多六步），做完只回一段结论。
+  // 它不写主会话历史、不记忆，避免把派活的中间过程灌进她的记忆。
+  async runSubAgent(task, model) {
+    const text = String(task || '').trim();
+    if (!text) return '要派什么活？说清楚点。';
+    if (this._subRunning) return '已经有一个子智能体在跑了，等它回来再派。';
+    this._subRunning = true;
+    try {
+      const messages = [
+        { role: 'system', content: '你是鲸倩派出去的子智能体，只做交代的这一件事。有工具就真的用工具做完；做完用不超过 300 字说结论、关键证据和没做完的地方。别客套、别解释自己。' },
+        { role: 'user', content: text }
+      ];
+      const defs = this.tools.defs().filter((d) => d.function.name !== 'sub_agent');
+      let last = '';
+      for (let step = 0; step < 6; step++) {
+        const res = await this.router.call(messages, defs, {
+          taskText: text,
+          temperature: 0.3,
+          timeoutMs: (this.cfg.budget && this.cfg.budget.perCallSeconds || 120) * 1000
+        });
+        const msg = (res.json.choices && res.json.choices[0] && res.json.choices[0].message) || {};
+        messages.push(msg);
+        if (msg.tool_calls && msg.tool_calls.length) {
+          for (const call of msg.tool_calls) {
+            let args = {};
+            try { args = JSON.parse(call.function.arguments || '{}'); } catch (e) { args = {}; }
+            // 子智能体不能替用户点头：红线动作只会拿到「需要确认」的提示
+            const out = await this.tools.run(call.function.name, args, { confirmed: false });
+            messages.push({ role: 'tool', tool_call_id: call.id, content: String(out) });
+          }
+          continue;
+        }
+        last = String(msg.content || '').trim();
+        break;
+      }
+      return '子智能体回来了：\n' + (last || '（它没给出结论）');
+    } catch (e) {
+      return '子智能体没跑成：' + e.message;
+    } finally {
+      this._subRunning = false;
+    }
   }
 
   async chat(userText, opts) {

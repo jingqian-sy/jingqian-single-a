@@ -12,7 +12,11 @@
       "applyUrl": "https://open.bigmodel.cn/usercenter/apikeys",
       "price_in": 0,
       "price_out": 0,
-      "freeQuota": { "amount": 2000000, "unit": "token", "reset": "day" },
+      "freeQuota": {
+        "amount": 2000000,
+        "unit": "token",
+        "reset": "day"
+      },
       "note": "智谱 GLM-4-Flash：有免费额度，新手先用这家。key 去 applyUrl 拿（注册→API Keys→复制）；tier=free 会走额度闸门（见 docs/额度策略.md）"
     },
     {
@@ -63,7 +67,10 @@
     "maxSteps": 12
   },
   "quotaSources": [
-    { "provider": "zhipu", "url": "" }
+    {
+      "provider": "zhipu",
+      "url": ""
+    }
   ],
   "quotaSourcesNote": "可选。填公开的额度说明页地址（不需要登录的那种），定期抓页面文本刷新对应 provider 的 freeQuota；url 留空或抓不到就保留旧值，不清空。不填就不刷新规则，只靠账本 + 探测。详见 docs/额度策略.md",
   "radar": {
@@ -153,5 +160,10 @@
       "14b": "qwen3:14b"
     },
     "note": "自适应判定层在 6~13 分区间会问本地小模型一句；model 要写本机实际有的 tag"
+  },
+  "update": {
+    "enabled": false,
+    "manifestUrl": "",
+    "url": "https://github.com/jingqian-sy/jingqian-single-a/releases"
   }
 }

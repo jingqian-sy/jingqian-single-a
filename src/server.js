@@ -301,6 +301,14 @@ async function handleApi(req, res, url) {
         });
       }
       if (body.sandbox) next.sandbox = Object.assign({}, next.sandbox, { mode: String(body.sandbox.mode || 'none') });
+      // 功能开关（从私有版迁来的：触手/子智能体/说话/看图/事件）
+      if (body.features && typeof body.features === 'object') {
+        const f = {};
+        for (const k of ['tentacle', 'subagent', 'speak', 'vision', 'events']) {
+          if (body.features[k] !== undefined) f[k] = !!body.features[k];
+        }
+        next.features = Object.assign({}, next.features, f);
+      }
       if (body.qq) {
         // QQ 适配层配置（默认关）：网关地址/令牌/白名单/群白名单
         next.qq = Object.assign({}, next.qq, {
@@ -365,6 +373,33 @@ async function handleApi(req, res, url) {
       } catch (e) {
         return json(res, 200, { ok: false, error: e.message });
       }
+    }
+  }
+
+  // 自更新：先只做「检查」（读 config.update.manifestUrl 的公开清单），下载/覆盖交给安装器
+  if (p === '/api/update/check') {
+    try {
+      const pk = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+      const conf = cfg.update || {};
+      if (!conf.manifestUrl) return json(res, 200, { ok: false, error: '没配置更新源（config.json 的 update.manifestUrl）' });
+      let man;
+      if (/^[a-zA-Z]:[\\/]/.test(conf.manifestUrl) || conf.manifestUrl.startsWith('file:')) {
+        man = JSON.parse(fs.readFileSync(conf.manifestUrl.replace(/^file:\/\//, ''), 'utf8'));
+      } else {
+        const r = await fetch(conf.manifestUrl, { signal: AbortSignal.timeout(15000), headers: { 'cache-control': 'no-cache' } });
+        if (!r.ok) throw new Error('更新源 HTTP ' + r.status);
+        man = await r.json();
+      }
+      return json(res, 200, {
+        ok: true,
+        current: pk.version,
+        latest: String(man.version || ''),
+        notes: String(man.notes || ''),
+        url: String(man.url || conf.url || ''),
+        newer: String(man.version || '') !== String(pk.version || '')
+      });
+    } catch (e) {
+      return json(res, 200, { ok: false, error: e.message });
     }
   }
 
