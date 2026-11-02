@@ -18,6 +18,7 @@ const { Router } = require('./router');
 const { Store } = require('./memory/store');
 const { EventLayer } = require('./memory/event');
 const { recall, forPrompt, kindOf } = require('./memory/retrieve');
+const { classify, scoreImportance } = require('./memory/classify');
 const { consolidate } = require('./memory/consolidate');
 const { Tools } = require('./tools');
 const { PluginHost } = require('./plugins');
@@ -330,13 +331,29 @@ class Her {
     const pinned = /记住|别忘|永远|一定/.test(raw);
     // 存的是「那件事」，不是「叫她记住」这句话本身：
     // 「记住：我喜欢喝美式咖啡。」要落成「我喜欢喝美式咖啡」，否则和已有记忆对不上、去重也失效。
-    const text = raw
+    // 「不对，我喜欢咖啡」这种更正：先把「不对/不是」剥掉，剩下的当事实存
+    const clipped = raw.replace(/^(不对|不是|说错|改口|改成|其实)[，,：:、\s]*/, '');
+    const text = clipped
       .replace(/^(?:帮我|给我)?(?:记一下|记住|记着|别忘了|别忘)[:：,，\s]*/g, '')
       .replace(/[，,。\s]*(?:别忘|别忘了|记住)[。！!]?$/g, '')
       .trim()
       .slice(0, 140);
     if (!text) return null;
-    const it = this.store.add({ text: toUserFact(text), kind: 'fact', importance: pinned ? 3 : 2, pinned, source: 'auto-capture' });
+    const cls = classify(text);
+    const imp = pinned ? 4 : scoreImportance(text, 'auto-capture');
+    const it = this.store.add({ text: toUserFact(text), kind: cls, importance: imp, pinned, source: 'auto-capture' });
+    // 他说「不对，我喜欢咖啡」这种更正：把同动词的旧偏好顶掉，别两条并存
+    if (it && /^(不对|不是|说错|改口|改成|其实)/.test(raw)) {
+      const fact = toUserFact(text);
+      const verb = (fact.match(/^用户(喜欢|爱|讨厌|爱吃|爱喝)/) || [])[1];
+      if (verb) {
+        const olds = this.store.active().filter((x) => x.id !== it.id && x.text.indexOf('用户' + verb) === 0 && x.text !== it.text);
+        for (const old of olds) {
+          // 不管当初存成 fact 还是 preference，同一个动词的旧说法都被新说法顶掉
+          this.store.archive(old.id);
+        }
+      }
+    }
     return it;
   }
 

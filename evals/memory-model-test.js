@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { Store } = require('../src/memory/store');
 const { recall } = require('../src/memory/retrieve');
+const { classify, scoreImportance, isEmotional } = require('../src/memory/classify');
 
 const TMP = path.join(__dirname, '.run', 'memory-model');
 let fails = 0;
@@ -51,6 +52,14 @@ function ok(name, cond, extra) {
   ok('scope=all 时全给', deep.hits.filter((h) => /火锅/.test(h.text)).length === 1, deep.block);
   const coreQ = await recall(store, '我叫什么', { topK: 5 });
   ok('core 平时就在', coreQ.hits.some((h) => /小王/.test(h.text)), coreQ.block);
+
+  // 自动判类 / 重要度（从记忆服务搬的规则）
+  ok('喜欢 → preference', classify('用户喜欢喝冰美式') === 'preference', classify('用户喜欢喝冰美式'));
+  ok('生日约定 → relation', classify('他的生日是十月二十五') === 'relation', classify('他的生日是十月二十五'));
+  ok('教训 → lesson', classify('以后别在高峰期跑大任务') === 'lesson', classify('以后别在高峰期跑大任务'));
+  ok('情绪 → emotional', classify('我今天有点累') === 'emotional', classify('我今天有点累'));
+  ok('约定类重要度 4', scoreImportance('约定每周三晚上打球') === 4, scoreImportance('约定每周三晚上打球'));
+  ok('自动捕获封顶 3', scoreImportance('用户喜欢喝冰美式', 'auto-capture') <= 3, scoreImportance('用户喜欢喝冰美式', 'auto-capture'));
 
   console.log(fails ? ('失败 ' + fails + ' 条') : '全部通过（9 条）');
   process.exit(fails ? 1 : 0);
