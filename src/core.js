@@ -481,6 +481,21 @@ class Her {
       cost += res.stat.cost;
 
       const msg = (res.json.choices && res.json.choices[0] && res.json.choices[0].message) || {};
+      // 有的家（比如 glm-4-flash）不按规矩回 tool_calls，而是把调用写成一段文本：
+      //   fetch_url
+      //   {"url":"..."}
+      // 这里兜一下，把它认回成真的工具调用，免得它对着用户念一段 JSON。
+      if (!(msg.tool_calls && msg.tool_calls.length) && typeof msg.content === 'string') {
+        const m = /^\s*([a-z_][a-z0-9_]{2,30})\s*\n?\s*(\{[\s\S]*\})\s*$/i.exec(msg.content);
+        const known = m && this.tools.defs().some((d) => d.function.name === m[1]);
+        if (known) {
+          try {
+            JSON.parse(m[2]);
+            msg.tool_calls = [{ id: 'textcall_' + step, type: 'function', function: { name: m[1], arguments: m[2] } }];
+            msg.content = '';
+          } catch (e) { /* 不是合法 JSON 就当普通文本 */ }
+        }
+      }
       messages.push(msg);
       if (msg.tool_calls && msg.tool_calls.length) {
         for (const call of msg.tool_calls) {

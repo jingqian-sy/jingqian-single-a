@@ -126,6 +126,14 @@ const DEFS = [
   {
     type: 'function',
     function: {
+      name: 'fetch_url',
+      description: '读一个网页的正文（只读、只支持 http/https、不进内网）。适合查公开资料；不要在每次回答前都去查',
+      parameters: { type: 'object', properties: { url: { type: 'string', description: 'http 或 https 地址' } }, required: ['url'] }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'remind',
       description: '定一个提醒，到点会记下来（服务重启也还在）',
       parameters: {
@@ -216,6 +224,7 @@ class Tools {
         case 'remember': return this.remember(args);
         case 'recall': return await this.recall(args);
         case 'event_timeline': return this.timeline(args);
+        case 'fetch_url': return await this.fetchUrl(args);
         case 'remind': return this.remind(args);
         default: return '没有这个工具：' + name;
       }
@@ -293,6 +302,43 @@ class Tools {
     const list = this.ctx.events.timeline(Math.min(Number(args.limit) || 6, 20));
     if (!list.length) return '还没有事件（记忆攒起来之后会自己串成事件）。';
     return list.map((e) => '- [' + e.start.slice(0, 10) + ' → ' + e.end.slice(0, 10) + '] ' + e.title + '（' + e.memories + ' 条）').join('\n');
+  }
+
+  async fetchUrl(args) {
+    let u = null;
+    try { u = new URL(String((args && args.url) || '').trim()); } catch (e) { return '这个地址不像网址：' + String((args && args.url) || ''); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '只支持 http/https 地址。';
+    const host = u.hostname.toLowerCase();
+    // 不进内网：本机和私有网段一律拒绝（这条是硬规矩，不给绕）
+    if (host === 'localhost' || host === '::1' || /^127\./.test(host) || /^10\./.test(host)
+      || /^192\.168\./.test(host) || /^169\.254\./.test(host)
+      || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host.endsWith('.local')) {
+      return '这个地址在内网/本机，我不去读（只读公网页面）。';
+    }
+    try {
+      const r = await fetch(u.toString(), {
+        headers: { 'user-agent': 'jingqian/1.0 (+local agent)', accept: 'text/html,text/plain,*/*' },
+        signal: AbortSignal.timeout(15000),
+        redirect: 'follow'
+      });
+      if (!r.ok) return '抓取失败：HTTP ' + r.status;
+      const ct = String(r.headers.get('content-type') || '');
+      let text = await r.text();
+      text = text.slice(0, 200000);
+      if (/html/i.test(ct)) {
+        text = text
+          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/\s{2,}/g, ' ');
+      }
+      text = text.trim();
+      if (!text) return '页面是空的（可能是纯脚本渲染，读不到正文）。';
+      return truncate(text, 6000);
+    } catch (e) {
+      return '抓取出错：' + e.message;
+    }
   }
 
   remind(args) {

@@ -64,7 +64,7 @@
       "ollama-8b"
     ],
     "escalate": true,
-    "maxSteps": 12
+    "maxSteps": 20
   },
   "quotaSources": [
     {
@@ -74,8 +74,8 @@
   ],
   "quotaSourcesNote": "可选。填公开的额度说明页地址（不需要登录的那种），定期抓页面文本刷新对应 provider 的 freeQuota；url 留空或抓不到就保留旧值，不清空。不填就不刷新规则，只靠账本 + 探测。详见 docs/额度策略.md",
   "memory": {
-    "topK": 5,
-    "maxHistory": 16,
+    "topK": 10,
+    "maxHistory": 20,
     "autoCapture": true,
     "writeEvents": true,
     "eventWindowDays": 7,
@@ -84,7 +84,9 @@
       "dupThreshold": 0.85,
       "oldEventDays": 60,
       "minGroup": 4
-    }
+    },
+    "summaryTrigger": 40,
+    "summaryKeep": 20
   },
   "embedding": {
     "enabled": false,
@@ -106,7 +108,8 @@
       "where",
       "ls",
       "cat",
-      "findstr"
+      "findstr",
+      "more"
     ],
     "commandTimeoutMs": 30000,
     "maxOutput": 12000,
@@ -155,5 +158,8 @@
   },
   "plugins": {
     "enabled": []
+  },
+  "features": {
+    "subagent": true
   }
 }
