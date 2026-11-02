@@ -17,7 +17,7 @@ const path = require('path');
 const { Router } = require('./router');
 const { Store } = require('./memory/store');
 const { EventLayer } = require('./memory/event');
-const { recall } = require('./memory/retrieve');
+const { recall, secondPerson } = require('./memory/retrieve');
 const { consolidate } = require('./memory/consolidate');
 const { Tools } = require('./tools');
 const { PluginHost } = require('./plugins');
@@ -33,6 +33,7 @@ const DEFAULT_PERSONA = [
   '硬规矩：说「做好了」之前必须真的调用过工具并看过返回值；没调用就不许说完成，做不到了就直说做不到。',
   '不知道的事就说不确定，不许编文件内容、不许编数字。',
   '人称要清楚：他说「我」指的是他自己，你回他用「你」；只有你自己的事才用「我」。',
+  '记忆里写成「用户」的，全部指他；跟他说话永远只准用「你」，不许对他说「用户」这两个字。',
   '别把他说的事说成你自己的（他说他爱喝冰美式，你就说「你爱喝」，不许说「我刚喝了一杯」）。'
 ].join('\n');
 
@@ -238,10 +239,13 @@ class Her {
   buildMessages(userText, recallRes, history) {
     const parts = [];
     const sum = this.loadSummary(this._curSession);
-    if (sum) parts.push('【之前聊到的】\n' + sum);
-    if (recallRes.block) parts.push('【参考记忆】\n' + recallRes.block);
+    if (sum) parts.push('【之前聊到的】\n' + secondPerson(sum));
+    if (recallRes.block) {
+      parts.push('【参考记忆】（下面这些里的「你」都是他，说的是他的事；跟他说话一律用「你」，'
+        + '别对他说「用户」两个字，也别把他说的事说成你自己经历的）\n' + recallRes.block);
+    }
     const ev = this.events.block(5);
-    if (ev) parts.push('【事件时间轴】\n' + ev);
+    if (ev) parts.push('【事件时间轴】\n' + secondPerson(ev));
     const userContent = parts.length ? parts.join('\n\n') + '\n\n【这次的话】\n' + userText : userText;
     return [{ role: 'system', content: this.cfg.persona || DEFAULT_PERSONA }]
       .concat(history.messages)

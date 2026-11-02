@@ -11,6 +11,7 @@ const path = require('path');
 const safety = require('../safety');
 const sandbox = require('../sandbox');
 const extras = require('./extras');
+const { secondPerson } = require('../memory/retrieve');
 const { readJson, writeJson, ensureDir, truncate, nowIso } = require('../util');
 
 function safeResolve(root, p) {
@@ -285,7 +286,7 @@ class Tools {
   async recall(args) {
     const r = await this.ctx.recall(args.query, { topK: 5 });
     if (!r.hits.length) return '记忆库里没搜到相关的事。';
-    return r.hits.map((h) => '- ' + (h.pinned ? '★' : '') + h.text).join('\n');
+    return r.hits.map((h) => '- ' + (h.pinned ? '★' : '') + secondPerson(h.text)).join('\n');
   }
 
   timeline(args) {

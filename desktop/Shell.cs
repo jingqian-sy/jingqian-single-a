@@ -400,6 +400,10 @@ namespace JingqianShell
         int selected = -1;          // 当前选中的气泡（点一下选中，Ctrl+C 或右键复制）
         ContextMenuStrip menu;
         public string LastCopied = "";
+        // 空对话给三个能点的例子：不用自己想说什么
+        public event Action<string> ExamplePicked;
+        readonly Rectangle[] chipRects = new Rectangle[3];
+        readonly string[] chipTexts = { "帮我记一件事", "把这段整理成要点", "陪我聊两句" };
 
         int Pad { get { return Dpi.X(18); } }
         int Radius { get { return Dpi.X(13); } }
@@ -481,6 +485,18 @@ namespace JingqianShell
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
+            // 空对话时，点那三张例子卡片
+            if (msgs.Count == 0 && e.Button == MouseButtons.Left)
+            {
+                for (int i = 0; i < chipRects.Length; i++)
+                {
+                    if (chipRects[i].Width > 0 && chipRects[i].Contains(e.Location))
+                    {
+                        if (ExamplePicked != null) ExamplePicked(chipTexts[i]);
+                        return;
+                    }
+                }
+            }
             int hit = HitTest(e.Location);
             if (e.Button == MouseButtons.Right)
             {
@@ -560,6 +576,16 @@ namespace JingqianShell
         public void RemovePending(int index)
         {
             if (index >= 0 && index < msgs.Count && msgs[index].Kind == "pending") msgs.RemoveAt(index);
+            Reflow();
+            Invalidate();
+        }
+
+        // 等太久时把「正在想…」换一句话，让人知道还活着
+        public void SetPendingText(int index, string text)
+        {
+            if (index < 0 || index >= msgs.Count || msgs[index].Kind != "pending") return;
+            if (msgs[index].Text == text) return;
+            msgs[index].Text = text;
             Reflow();
             Invalidate();
         }
@@ -739,6 +765,31 @@ namespace JingqianShell
                 emptyTiny,
                 new Rectangle(0, ir.Bottom + Dpi.X(14) + ts.Height + Dpi.X(42), ClientSize.Width, Dpi.X(22)),
                 Color.FromArgb(164, 178, 190), TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding);
+
+            // 三个能点的例子：第一屏别只让人干瞪眼
+            Font chipFont = Theme.Ui(9f, false);
+            int[] widths = new int[chipTexts.Length];
+            int totalW = 0;
+            for (int i = 0; i < chipTexts.Length; i++)
+            {
+                widths[i] = TextRenderer.MeasureText(chipTexts[i], chipFont).Width + Dpi.X(26);
+                totalW += widths[i] + (i > 0 ? Dpi.X(10) : 0);
+            }
+            int cx = Math.Max(Dpi.X(10), (ClientSize.Width - totalW) / 2);
+            int chipTop = ir.Bottom + Dpi.X(14) + ts.Height + Dpi.X(42) + Dpi.X(34);
+            for (int i = 0; i < chipTexts.Length; i++)
+            {
+                Rectangle r = new Rectangle(cx, chipTop, widths[i], Dpi.X(30));
+                using (GraphicsPath gp = Theme.Round(r, Dpi.X(15)))
+                {
+                    using (SolidBrush b = new SolidBrush(Color.White)) g.FillPath(b, gp);
+                    using (Pen p = new Pen(Theme.Border, 1f)) g.DrawPath(p, gp);
+                }
+                TextRenderer.DrawText(g, chipTexts[i], chipFont, r, Theme.AccentDeep,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                chipRects[i] = r;
+                cx = r.Right + Dpi.X(10);
+            }
         }
     }
 
@@ -889,6 +940,9 @@ namespace JingqianShell
         Label costLabel;
         bool routeFilling;
         int toolRight;
+        System.Windows.Forms.Timer waitTimer;
+        int waitSeconds;
+        int waitPending = -1;
 
         public MainForm(string repoRoot, string baseUrl, bool openSettings)
         {
@@ -913,6 +967,7 @@ namespace JingqianShell
                 if (wh.Length == 2 && int.TryParse(wh[0], out uw) && int.TryParse(wh[1], out uh))
                     Size = new Size(Dpi.X(uw), Dpi.X(uh));
             }
+            else RestoreWindowState();
             if (Environment.GetEnvironmentVariable("JQ_SHELL_OFFSCREEN") == "1")
             {
                 StartPosition = FormStartPosition.Manual;
@@ -999,6 +1054,7 @@ namespace JingqianShell
             };
             FormClosing += delegate
             {
+                SaveWindowState();
                 if (tray != null) { tray.Visible = false; tray.Dispose(); tray = null; }
                 try { if (tts != null) { tts.SpeakAsyncCancelAll(); tts.Dispose(); tts = null; } } catch { }
             };
@@ -1019,6 +1075,42 @@ namespace JingqianShell
             statusTimer.Start();
             LoadRoute();
             RefreshCost();
+        }
+
+        // 记住窗口大小和位置：下次打开还是你摆的样子
+        string WindowStateFile { get { return Path.Combine(Application.StartupPath, "ui-window.txt"); } }
+
+        void RestoreWindowState()
+        {
+            try
+            {
+                string f = WindowStateFile;
+                if (!File.Exists(f)) return;
+                string[] p = File.ReadAllText(f).Trim().Split(',');
+                if (p.Length < 5) return;
+                int x, y, w, h;
+                if (!int.TryParse(p[0], out x) || !int.TryParse(p[1], out y)
+                    || !int.TryParse(p[2], out w) || !int.TryParse(p[3], out h)) return;
+                Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+                if (w < MinimumSize.Width || h < MinimumSize.Height) return;
+                if (x < wa.Left - w + Dpi.X(80) || y < wa.Top || x > wa.Right - Dpi.X(80) || y > wa.Bottom - Dpi.X(40)) return;
+                StartPosition = FormStartPosition.Manual;
+                Bounds = new Rectangle(x, y, Math.Min(w, wa.Width), Math.Min(h, wa.Height));
+                if (p[4] == "1") WindowState = FormWindowState.Maximized;
+            }
+            catch { }
+        }
+
+        void SaveWindowState()
+        {
+            try
+            {
+                Rectangle b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+                if (b.Width <= 0 || b.Height <= 0) return;
+                File.WriteAllText(WindowStateFile, b.X + "," + b.Y + "," + b.Width + "," + b.Height + ","
+                    + (WindowState == FormWindowState.Maximized ? "1" : "0"));
+            }
+            catch { }
         }
 
         void BuildUi()
@@ -1201,6 +1293,12 @@ namespace JingqianShell
             Controls.Add(chatView);
             chatView.BringToFront();
             chatView.EmptyIcon = LoadEmptyIcon();
+            chatView.ExamplePicked += delegate (string t)
+            {
+                input.Text = t;
+                input.Select();
+                input.Focus();
+            };
 
             // 右下角拖拽改大小
             Panel grip = new Panel();
@@ -2144,6 +2242,34 @@ namespace JingqianShell
             SendCurrent();
         }
 
+        // 等太久的时候，把「正在想…」换个说法，别让人以为卡死了
+        void StartWaitHint(int pending)
+        {
+            waitPending = pending;
+            waitSeconds = 0;
+            if (waitTimer == null)
+            {
+                waitTimer = new System.Windows.Forms.Timer();
+                waitTimer.Interval = 1000;
+                waitTimer.Tick += delegate { WaitTick(); };
+            }
+            waitTimer.Start();
+        }
+
+        void WaitTick()
+        {
+            waitSeconds++;
+            if (waitSeconds == 8) chatView.SetPendingText(waitPending, "还在想…本机模型会慢一点，别急");
+            if (waitSeconds == 20) chatView.SetPendingText(waitPending, "有点慢。等不及可以点工具栏右边换一家模型");
+        }
+
+        void StopWaitHint()
+        {
+            if (waitTimer != null) waitTimer.Stop();
+            waitSeconds = 0;
+            waitPending = -1;
+        }
+
         void SendCurrent()
         {
             if (sending) return;
@@ -2165,6 +2291,7 @@ namespace JingqianShell
             caption.StatusText = "正在想（多步任务会慢一点）…";
             caption.Invalidate();
             int pending = chatView.AddPending();
+            StartWaitHint(pending);
             ThreadPool.QueueUserWorkItem(delegate
             {
                 string reply, stats;
@@ -2183,6 +2310,7 @@ namespace JingqianShell
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
+                        StopWaitHint();
                         chatView.RemovePending(pending);
                         foreach (Dictionary<string, object> t in trace)
                         {
