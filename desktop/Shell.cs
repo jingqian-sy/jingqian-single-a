@@ -867,10 +867,6 @@ namespace JingqianShell
         NotifyIcon tray;
         Label statsLabel;
         Label clockLabel;
-        Panel radarBar;
-        Label radarLabel;
-        Button radarGoBtn;
-        Button radarLaterBtn;
         ToolTip tip;
         int statTick;
         public bool VerifyOnly;
@@ -953,23 +949,6 @@ namespace JingqianShell
                     if (DumpBubbles)
                     {
                         DumpCount = bubbles;
-                        // 验收/截图用钩子：JQ_RADAR_DEMO=1 时先同步问一次雷达，让截图能拍到顶部横条
-                        if (Environment.GetEnvironmentVariable("JQ_RADAR_DEMO") == "1")
-                        {
-                            try
-                            {
-                                Dictionary<string, object> rd = api.Get("/api/radar", 5000);
-                                object arr;
-                                if (rd.TryGetValue("new", out arr) && arr is object[] && ((object[])arr).Length > 0)
-                                {
-                                    ShowRadarBar(((object[])arr).Length, "");
-                                    Application.DoEvents();
-                                    System.Threading.Thread.Sleep(150);
-                                    Application.DoEvents();
-                                }
-                            }
-                            catch { }
-                        }
                         try { RefreshStats(); } catch { }
                         Console.WriteLine("bubbles=" + bubbles + " (session=web, 服务状态=" + (ok ? "up" : "down") + ")");
                         try
@@ -1000,7 +979,6 @@ namespace JingqianShell
                         Activate();
                         if (input != null) { input.Select(); input.Focus(); }
                     }
-                    if (ok && !VerifyOnly) CheckRadar();
                     if (ok && !VerifyOnly && !DumpBubbles) CheckFirstRun();
                     if (ok && Environment.GetEnvironmentVariable("JQ_DEMO_SEQ") == "1") StartDemoSequence();
                     if (openSettings) OpenSettings();
@@ -1044,7 +1022,7 @@ namespace JingqianShell
 
         void BuildUi()
         {
-            // ---- 顶部容器：标题栏在最上，工具栏第二，雷达条第三 ----
+            // ---- 顶部容器：标题栏在最上，工具栏第二 ----
             // 以前三块都用 Dock.Top，谁最后加谁跑最上面，结果工具栏压到了标题栏上。
             // 现在统一放一个容器里手动排版，顺序写死，不会再反。
             topHost = new Panel();
@@ -1119,35 +1097,6 @@ namespace JingqianShell
             dragHintLabel.Font = Theme.Ui(8.5f, false);
             dragHintLabel.Text = "文件 / 图片可以直接拖进来";
             toolPanel.Controls.Add(dragHintLabel);
-
-            // 免费模型雷达条：整条横在工具栏下面；平时藏着，发现新的免费模型才出现。
-            // 只提示，不自动写密钥、不自动启用；「以后再说」= 记为已读。
-            radarBar = new Panel();
-            radarBar.BackColor = Color.FromArgb(255, 250, 232);
-            radarBar.Visible = false;
-            radarBar.Paint += delegate (object s, PaintEventArgs e)
-            {
-                using (Pen p = new Pen(Color.FromArgb(240, 224, 186), 1f))
-                    e.Graphics.DrawLine(p, 0, radarBar.Height - 1, radarBar.Width, radarBar.Height - 1);
-            };
-            radarLabel = new Label();
-            radarLabel.AutoSize = false;
-            radarLabel.TextAlign = ContentAlignment.MiddleLeft;
-            radarLabel.ForeColor = Theme.AccentDeep;
-            radarLabel.Font = Theme.Ui(9f, false);
-            radarBar.Controls.Add(radarLabel);
-
-            radarGoBtn = MakeButton("去配置", Theme.Accent, Color.White);
-            radarGoBtn.Font = Theme.Ui(8.5f, true);
-            radarGoBtn.Click += delegate { HideRadarBar(); OpenSettings(); };
-            radarBar.Controls.Add(radarGoBtn);
-
-            radarLaterBtn = MakeButton("以后再说", Color.White, Theme.AccentDeep);
-            radarLaterBtn.Font = Theme.Ui(8.5f, true);
-            radarLaterBtn.Click += delegate { HideRadarBar(); AckRadar(); };
-            radarBar.Controls.Add(radarLaterBtn);
-
-            topHost.Controls.Add(radarBar);
 
             // ---- 底部输入区 ----
             bottom = new Panel();
@@ -1296,18 +1245,10 @@ namespace JingqianShell
         {
             if (topHost == null || caption == null || toolPanel == null) return;
             int w = ClientSize.Width;
-            bool radar = radarBar != null && radarBar.Visible;
-            topHost.Height = Dpi.X(radar ? 122 : 88);
+            topHost.Height = Dpi.X(88);
             caption.SetBounds(0, 0, w, Dpi.X(48));
             toolPanel.SetBounds(0, Dpi.X(48), w, Dpi.X(40));
             toolBorderY = toolPanel.Height - 1;
-            radarBar.SetBounds(0, Dpi.X(88), w, Dpi.X(34));
-            if (radarGoBtn != null)
-            {
-                radarLaterBtn.SetBounds(w - Dpi.X(12) - radarLaterBtn.Width, Dpi.X(4), radarLaterBtn.Width, Dpi.X(26));
-                radarGoBtn.SetBounds(radarLaterBtn.Left - Dpi.X(8) - radarGoBtn.Width, Dpi.X(4), radarGoBtn.Width, Dpi.X(26));
-                radarLabel.SetBounds(Dpi.X(16), 0, Math.Max(Dpi.X(120), radarGoBtn.Left - Dpi.X(28)), Dpi.X(34));
-            }
             // 右侧先排「今日花费」和「模型下拉」，提示字夹在按钮和它们中间
             int rightEdge = toolPanel.Width - Dpi.X(12);
             if (costLabel != null)
@@ -1482,71 +1423,6 @@ namespace JingqianShell
         int TextWidth(string text)
         {
             return TextRenderer.MeasureText(text, Theme.Ui(9f, true)).Width + Dpi.X(22);
-        }
-
-        // ---------- 免费模型雷达提示条：显隐 / 后台问一次 ----------
-        void ShowRadarBar(int n, string sample)
-        {
-            if (radarBar == null) return;
-            // 字数控制在一条内：具体是哪几个模型，去设置页看（横条里不塞长名字）
-            radarLabel.Text = "发现 " + n + " 个新的免费模型，要现在配置吗？";
-            radarBar.Visible = true;
-            LayoutTop();
-            radarBar.Invalidate();
-        }
-
-        void HideRadarBar()
-        {
-            if (radarBar == null) return;
-            radarBar.Visible = false;
-            LayoutTop();
-        }
-
-        // 只读服务里的缓存，不在 UI 线程里联网
-        void CheckRadar()
-        {
-            System.Threading.ThreadPool.QueueUserWorkItem(delegate (object state)
-            {
-                int n = 0;
-                string sample = "";
-                try
-                {
-                    Dictionary<string, object> r = api.Get("/api/radar", 5000);
-                    object arr;
-                    if (r.TryGetValue("new", out arr) && arr is object[])
-                    {
-                        foreach (object o in (object[])arr)
-                        {
-                            Dictionary<string, object> d = o as Dictionary<string, object>;
-                            if (d == null) continue;
-                            n++;
-                            if (sample.Length == 0 && d.ContainsKey("model")) sample = Convert.ToString(d["model"]);
-                        }
-                    }
-                }
-                catch { return; }
-                if (n <= 0) return;
-                try
-                {
-                    BeginInvoke((MethodInvoker)delegate { ShowRadarBar(n, sample); });
-                }
-                catch { }
-            });
-        }
-
-        // 「以后再说」：让服务把这几条记成已读，下次不再提醒
-        void AckRadar()
-        {
-            System.Threading.ThreadPool.QueueUserWorkItem(delegate (object state)
-            {
-                try
-                {
-                    Dictionary<string, object> body = new Dictionary<string, object>();
-                    body["all"] = true;
-                    api.Post("/api/radar/ack", body, 5000);
-                }
-                catch { }
-            });
         }
 
         void ShowStatus()
@@ -2414,6 +2290,7 @@ namespace JingqianShell
         Panel headerPanel, contentPanel, footerPanel;
         FlatBtn btnSave, btnCancel, btnClose, btnConsole, btnPersona, btnVoiceNav, btnFeatureNav, btnRefreshStats, btnTestModel;
         FlatBtn btnTestProv, btnSpeakTest;
+        FlatBtn btnPickModel;
         TextBox txtPersona;
         FlatBtn btnResetPersona;
         Label lblProviderHint;
@@ -2663,6 +2540,8 @@ namespace JingqianShell
             chkShowKey.CheckedChanged += delegate { txtKey.PasswordChar = chkShowKey.Checked ? '\0' : '*'; };
             contentPanel.Controls.Add(chkShowKey);
             Hint("密钥显示为掩码；不改就沿用原来的。", 326, 488);
+            btnPickModel = SmallBtn("选模型…", 14, 480, 96, false);
+            btnPickModel.Click += delegate { PickModel(true); };
 
             Cap("档位", 14, 512);
             cmbTier = new ComboBox();
@@ -2968,13 +2847,6 @@ namespace JingqianShell
                 Dictionary<string, object> sc = api.Get("/api/selfcheck", 4000);
                 Dictionary<string, object> st = api.Get("/api/stats", 5000);
                 object o;
-                int radarNew = 0;
-                try
-                {
-                    Dictionary<string, object> rd = api.Get("/api/radar", 3000);
-                    if (rd.TryGetValue("new", out o) && o is object[]) radarNew = ((object[])o).Length;
-                }
-                catch { }
 
                 string port = "?";
                 long uptime = 0;
@@ -3013,7 +2885,7 @@ namespace JingqianShell
 
                 string up = uptime >= 3600 ? (uptime / 3600) + " 小时 " + ((uptime % 3600) / 60) + " 分" : (uptime / 60) + " 分钟";
                 lblStatus.Text = "服务 127.0.0.1:" + port + " · 已跑 " + up + " · 模型 " + provReady + "/" + provTotal + " 就绪\n"
-                    + "今日 " + calls + " 次 · " + (toks / 1000.0).ToString("0.#") + "k tokens · 记忆 " + memCount + " 条 · 雷达待处理 " + radarNew + " 个";
+                    + "今日 " + calls + " 次 · " + (toks / 1000.0).ToString("0.#") + "k tokens · 记忆 " + memCount + " 条";
                 lblStatus.ForeColor = Theme.Text;
             }
             catch (Exception ex)
@@ -3408,6 +3280,60 @@ namespace JingqianShell
             }
         }
 
+        // 接上密钥先问「用哪个模型」：用这把 key 去问服务商能用的模型，让用户挑
+        void PickModel(bool manualOk)
+        {
+            string baseUrl = txtBase.Text.Trim();
+            if (baseUrl.Length == 0)
+            {
+                lblProviderHint.Text = "先填这一家的接口地址（base），才能问它有哪些模型。";
+                lblProviderHint.ForeColor = Theme.Warn;
+                return;
+            }
+            Dictionary<string, object> body = new Dictionary<string, object>();
+            body["name"] = (current >= 0 && current < providers.Count) ? Get(providers[current], "name") : "";
+            body["base"] = baseUrl;
+            body["key"] = txtKey.Text.Trim();
+            btnPickModel.Enabled = false;
+            lblProviderHint.Text = "正在问这家能用哪些模型…";
+            lblProviderHint.ForeColor = Theme.Dim;
+            Application.DoEvents();
+            try
+            {
+                Dictionary<string, object> r = api.Post("/api/models", body, 25000);
+                List<string> models = new List<string>();
+                object arr;
+                if (r.ContainsKey("models") && (arr = r["models"]) is object[])
+                    foreach (object o in (object[])arr) models.Add(Convert.ToString(o));
+                bool fromList = r.ContainsKey("source") && Convert.ToString(r["source"]) == "list";
+                string note = fromList
+                    ? "这是这把 key 现在能用的模型（" + models.Count + " 个）。"
+                    : ("问不到完整列表：" + (r.ContainsKey("error") ? Convert.ToString(r["error"]) : "接口没回")
+                        + (models.Count > 0 ? "。下面是常见的几个，也可以自己填。" : "。可以直接手填模型名。"));
+                using (ModelPickerForm f = new ModelPickerForm(models, txtModel.Text.Trim(), note, manualOk))
+                {
+                    if (f.ShowDialog(this) == DialogResult.OK && f.Picked.Length > 0)
+                    {
+                        txtModel.Text = f.Picked;
+                        if (current >= 0 && current < providers.Count) providers[current]["model"] = f.Picked;
+                        lblProviderHint.Text = "选了「" + f.Picked + "」。点「保存」写进配置。";
+                        lblProviderHint.ForeColor = Color.FromArgb(60, 150, 100);
+                    }
+                    else
+                    {
+                        lblProviderHint.Text = "没选也行，模型名下面自己填。";
+                        lblProviderHint.ForeColor = Theme.Dim;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                lblProviderHint.Text = "问模型列表失败：" + ex.Message;
+                lblProviderHint.ForeColor = Theme.Warn;
+            }
+            finally { btnPickModel.Enabled = true; }
+        }
+
         // 在设置页直接测当前这家能不能通（新手填完 key 最想确认这个）
         void TestProvider()
         {
@@ -3439,6 +3365,12 @@ namespace JingqianShell
                 {
                     lblProviderHint.Text = "通了（" + ms + "）。点下面「保存」→ 关掉窗口重开就能用这家。";
                     lblProviderHint.ForeColor = Color.FromArgb(60, 150, 100);
+                    // 通了但还没选模型：接着问一句用哪个模型（接上密钥先问模型）
+                    if (txtModel.Text.Trim().Length == 0)
+                    {
+                        btnTestProv.Enabled = true;
+                        PickModel(true);
+                    }
                 }
                 else
                 {
@@ -4316,6 +4248,94 @@ namespace JingqianShell
                 if (mode == "dump") return f.DumpCount > 0 ? 0 : 2;
             }
             return 0;
+        }
+    }
+
+    // ===================== 选模型：接上密钥先问用哪个 =====================
+    class ModelPickerForm : Form
+    {
+        public string Picked = "";
+        readonly ListBox list;
+        readonly TextBox manual;
+
+        public ModelPickerForm(List<string> models, string current, string note, bool allowManual)
+        {
+            Text = "选模型";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            ShowInTaskbar = false;
+            Font = Theme.Ui(9f, false);
+            BackColor = Theme.Paper;
+            ClientSize = new Size(Dpi.X(430), Dpi.X(400));
+
+            Label head = new Label();
+            head.Text = "这把密钥能用哪个模型？";
+            head.Font = Theme.Ui(11f, true);
+            head.ForeColor = Theme.Text;
+            head.SetBounds(Dpi.X(18), Dpi.X(12), Dpi.X(390), Dpi.X(24));
+            Controls.Add(head);
+
+            Label desc = new Label();
+            desc.Text = note;
+            desc.ForeColor = Theme.Dim;
+            desc.Font = Theme.Ui(8.5f, false);
+            desc.SetBounds(Dpi.X(18), Dpi.X(38), Dpi.X(392), Dpi.X(42));
+            Controls.Add(desc);
+
+            list = new ListBox();
+            list.Font = Theme.Ui(9.5f, false);
+            list.BorderStyle = BorderStyle.FixedSingle;
+            list.IntegralHeight = false;
+            list.SetBounds(Dpi.X(18), Dpi.X(84), Dpi.X(392), Dpi.X(210));
+            foreach (string m in models) list.Items.Add(m);
+            if (current.Length > 0)
+            {
+                int idx = list.Items.IndexOf(current);
+                if (idx >= 0) list.SelectedIndex = idx;
+            }
+            if (list.SelectedIndex < 0 && list.Items.Count > 0) list.SelectedIndex = 0;
+            list.DoubleClick += delegate { Accept(); };
+            Controls.Add(list);
+
+            Label cap = new Label();
+            cap.Text = allowManual ? "或者自己填模型名：" : "模型名：";
+            cap.ForeColor = Theme.Dim;
+            cap.SetBounds(Dpi.X(18), Dpi.X(302), Dpi.X(180), Dpi.X(20));
+            Controls.Add(cap);
+
+            manual = new TextBox();
+            manual.Font = Theme.Ui(9.5f, false);
+            manual.BorderStyle = BorderStyle.FixedSingle;
+            manual.BackColor = Color.White;
+            manual.Text = current;
+            manual.SetBounds(Dpi.X(18), Dpi.X(324), Dpi.X(392), Dpi.X(26));
+            manual.KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Accept(); } };
+            Controls.Add(manual);
+
+            FlatBtn ok = new FlatBtn("用这个", Theme.Accent, Color.White);
+            ok.Font = Theme.Ui(9f, true);
+            ok.SetBounds(Dpi.X(430 - 18 - 96), Dpi.X(358), Dpi.X(96), Dpi.X(30));
+            ok.Click += delegate { Accept(); };
+            Controls.Add(ok);
+
+            FlatBtn cancel = new FlatBtn("取消", Color.White, Theme.AccentDeep);
+            cancel.NormalBorder = Theme.Border;
+            cancel.Font = Theme.Ui(9f, false);
+            cancel.SetBounds(Dpi.X(430 - 18 - 96 - 8 - 88), Dpi.X(358), Dpi.X(88), Dpi.X(30));
+            cancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
+            Controls.Add(cancel);
+        }
+
+        void Accept()
+        {
+            string t = manual.Text.Trim();
+            if (t.Length == 0 && list.SelectedItem != null) t = Convert.ToString(list.SelectedItem);
+            if (t.Length == 0) { MessageBox.Show(this, "模型名不能空。", "选模型", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            Picked = t;
+            DialogResult = DialogResult.OK;
+            Close();
         }
     }
 

@@ -15,6 +15,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const { spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
@@ -22,6 +23,27 @@ const TMP = path.join(__dirname, '.run', 'route-cost');
 const CFG = path.join(TMP, 'config.json');
 const DATA = path.join(TMP, 'data');
 const PORT = 18000 + (process.pid % 900);
+const FAKE_PORT = PORT + 1;
+let fake = null;
+
+// 假服务商：只提供一个 /v1/models，用来看「接上 key 先问用哪个模型」这条路
+function startFakeProvider() {
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      if (req.method === 'GET' && /\/models$/.test(String(req.url || ''))) {
+        if (String(req.headers.authorization || '') !== 'Bearer good-key') {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'bad key' }));
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ data: [{ id: 'm-one' }, { id: 'm-two' }] }));
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    srv.listen(FAKE_PORT, '127.0.0.1', () => resolve(srv));
+  });
+}
 
 let fails = 0;
 function ok(name, cond, extra) {
@@ -41,10 +63,10 @@ function seed() {
     port: PORT,
     providers: [
       { name: '本机', base: 'http://127.0.0.1:9/v1/chat/completions', model: 'qwen3-8b', tier: 'local', price_in: 0, price_out: 0 },
-      { name: '智谱', base: 'http://127.0.0.1:9/v1/chat/completions', model: 'glm-4-flash', tier: 'free', key: '', price_in: 0, price_out: 0 }
+      { name: '智谱', base: 'http://127.0.0.1:9/v1/chat/completions', model: 'glm-4-flash', tier: 'free', key: '', price_in: 0, price_out: 0 },
+      { name: '假家', base: 'http://127.0.0.1:' + FAKE_PORT + '/v1/chat/completions', model: 'm-one', tier: 'free', key: 'good-key', price_in: 0, price_out: 0 }
     ],
     route: { mode: 'cheap-first', order: [], escalate: true },
-    radar: { enabled: false },
     memory: { idleConsolidateMinutes: 0 },
     embedding: { enabled: false }
   }, null, 2), 'utf8');
@@ -65,6 +87,7 @@ const post = (p, body) => fetch(base + p, {
 
 (async () => {
   seed();
+  fake = await startFakeProvider();
   const srv = spawn(process.execPath, [path.join(ROOT, 'src', 'server.js')], {
     cwd: ROOT,
     stdio: 'ignore',
@@ -79,7 +102,7 @@ const post = (p, body) => fetch(base + p, {
     if (!up) throw new Error('服务没起来（' + base + '）');
 
     const s0 = await get('/api/route');
-    ok('GET /api/route 列出提供方', Array.isArray(s0.providers) && s0.providers.length === 2, s0.providers && s0.providers.length);
+    ok('GET /api/route 列出提供方', Array.isArray(s0.providers) && s0.providers.length === 3, s0.providers && s0.providers.length);
     ok('默认 cheap-first', s0.route && s0.route.mode === 'cheap-first', s0.route);
     ok('本地模型标成免费', s0.providers[0].free === true, s0.providers[0]);
     ok('未填 key 的云端 ready=false', s0.providers[1].ready === false, s0.providers[1]);
@@ -109,9 +132,18 @@ const post = (p, body) => fetch(base + p, {
     ok('重置后今日归零', c1.today.cost === 0 && c1.today.calls === 0, c1.today);
     ok('原始账本没被删', fs.existsSync(path.join(DATA, 'ledger', dayKey() + '.json')), 'ledger');
 
-    console.log(fails ? ('失败 ' + fails + ' 条') : '全部通过（17 条）');
+    // 接上密钥先问「用哪个模型」：真问服务商的 /v1/models
+    const ml = await post('/api/models', { name: '假家' });
+    ok('问得到这把 key 能用的模型', ml.ok === true && ml.source === 'list' && ml.models.indexOf('m-two') >= 0, ml);
+    const mlBad = await post('/api/models', { base: 'http://127.0.0.1:' + FAKE_PORT + '/v1/chat/completions', key: 'bad' });
+    ok('key 不对时明确报错、不编模型', mlBad.ok === false && !!mlBad.error, mlBad);
+    const mlNone = await post('/api/models', { name: '智谱' });
+    ok('问不到时给建议列表（或空），不假装成功', mlNone.source === 'preset' && Array.isArray(mlNone.models), mlNone);
+
+    console.log(fails ? ('失败 ' + fails + ' 条') : '全部通过（20 条）');
   } finally {
     srv.kill();
+    if (fake) fake.close();
   }
   process.exit(fails ? 1 : 0);
 })().catch((e) => {

@@ -14,7 +14,6 @@
  *   6. 服务冒烟：真起 src/server.js，打 /api/chat
  *   7. 评测子集：m01 m02 t02 t08 r01 x01（跑两遍，机器判定）
  *   …（8~17 见下面 main）
- *  18. 免费模型雷达（evals/radar-test.js，本地假页面、不联网）
  *
  * 所有临时数据都写在 data/ci-run/ 和 evals/.run/ 下，覆盖不到你的真实记忆与成绩报表。
  */
@@ -223,12 +222,11 @@ async function main() {
     await stepAsync('17. QQ 一键连接（发现/连接/写配置/断开）', () => nodeAsync([
       path.join(__dirname, 'qq-connect-test.js')
     ], {}));
-    await stepAsync('18. 免费模型雷达（本地假页面：解析 / 去重 / 404 保留旧清单）', () => node([path.join(__dirname, 'radar-test.js')]));
-    await stepAsync('19. 拖文件附件（文本读入 / 二进制跳过 / 图片多模态 / 非视觉说实话）', () => node([path.join(__dirname, 'attach-test.js')]));
-    await stepAsync('20. 插件版 MCP（真按 stdio 协议：initialize / tools/list / 四个工具 / 出错不崩）', () => node([path.join(__dirname, 'mcp-test.js')]));
-    await stepAsync('21. 迁移来的功能工具（触手/说话/子智能体：开关、红线、未知动作）', () => node([path.join(__dirname, 'extras-test.js')]));
-    await stepAsync('22. 模型快捷切换 + 今日账单（/api/route 热切 / /api/cost / 重置只打水位）', () => node([path.join(__dirname, 'route-cost-test.js')]));
-    await stepAsync('23. 插件模组（装/启用/工具真跑/插件接口/按钮/无权限被拒/卸载）', () => node([path.join(__dirname, 'plugins-test.js')]));
+    await stepAsync('18. 拖文件附件（文本读入 / 二进制跳过 / 图片多模态 / 非视觉说实话）', () => node([path.join(__dirname, 'attach-test.js')]));
+    await stepAsync('19. 插件版 MCP（真按 stdio 协议：initialize / tools/list / 四个工具 / 出错不崩）', () => node([path.join(__dirname, 'mcp-test.js')]));
+    await stepAsync('20. 迁移来的功能工具（触手/说话/子智能体：开关、红线、未知动作）', () => node([path.join(__dirname, 'extras-test.js')]));
+    await stepAsync('21. 模型快捷切换 + 今日账单（/api/route 热切 / /api/cost / 重置只打水位）', () => node([path.join(__dirname, 'route-cost-test.js')]));
+    await stepAsync('22. 插件模组（装/启用/工具真跑/插件接口/按钮/无权限被拒/卸载）', () => node([path.join(__dirname, 'plugins-test.js')]));
 
     console.log('\n全部通过，用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
   } catch (e) {

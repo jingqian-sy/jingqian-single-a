@@ -116,7 +116,6 @@ function toolText(res) {
     route: { mode: 'fixed', order: ['mock'], maxSteps: 1 },
     tools: { workspace: 'data/workspace' },
     memory: { autoCapture: false, writeEvents: false },
-    radar: { enabled: false },
     qq: { enabled: false, allow: [], groups: [] },
     budget: { perCallSeconds: 10, perTaskSeconds: 20 }
   }, null, 2), 'utf8');

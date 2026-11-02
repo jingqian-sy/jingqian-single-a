@@ -157,28 +157,6 @@ function collectProvider(i) {
   return { name: get('name'), base: get('base'), model: get('model'), key: get('key'), tier: get('tier') || 'local' };
 }
 
-// 从免费模型雷达跳过来（/console.html?radar=模型名&provider=来源）：
-// 只把名字填进表单，密钥留空、enabled 关着——绝不自动写密钥、不自动启用
-let radarFilled = false;
-const radarQs = new URLSearchParams(location.search);
-function prefillFromRadar() {
-  const model = radarQs.get('radar');
-  if (!model || radarFilled || !cfg) return;
-  radarFilled = true;
-  cfg.providers = cfg.providers || [];
-  cfg.providers.push({
-    name: (radarQs.get('provider') || '') + (radarQs.get('provider') ? '·' : '') + model,
-    base: 'https://',
-    model: model,
-    key: '',
-    tier: 'free',
-    enabled: false
-  });
-  renderProviders();
-  setStatus('从雷达带过来一个：' + model + '。密钥留空、先别启用；补上接口地址和 key 再保存。', 'ok');
-  try { history.replaceState(null, '', '/console.html'); } catch (e) { }
-}
-
 async function load() {
   setStatus('读取中…');
   try {
@@ -198,7 +176,6 @@ async function load() {
     el('maxHistory').value = (cfg.memory && cfg.memory.maxHistory) || 12;
     el('port').value = cfg.port || 7889;
     setStatus('读好了', 'ok');
-    prefillFromRadar();
   } catch (e) { setStatus('读取失败：' + e.message, 'bad'); }
 }
 

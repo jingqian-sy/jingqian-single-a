@@ -39,7 +39,6 @@ function seed() {
     port: PORT,
     providers: [{ name: '本机', base: 'http://127.0.0.1:9/v1/chat/completions', model: 'x', tier: 'local', price_in: 0, price_out: 0 }],
     route: { mode: 'fixed', order: ['本机'] },
-    radar: { enabled: false },
     embedding: { enabled: false },
     memory: { idleConsolidateMinutes: 0 },
     plugins: { enabled: ['badperm'] }

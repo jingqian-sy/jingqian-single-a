@@ -11,8 +11,6 @@
  *   POST /api/consolidate  立刻整理一次记忆
  *   GET  /api/stats        账本 + 审计计数 + 记忆数
  *   GET  /api/audit?limit= 最近审计
- *   GET  /api/radar        免费模型雷达：{ new: [...] }（只读缓存，不联网）
- *   POST /api/radar/ack    { ids:[...] } 或 { all:true } → 记为已读
  *
  * 默认只听 127.0.0.1，别自己暴露到公网——这版没有登录鉴权。
  */
@@ -23,7 +21,6 @@ const { URL } = require('url');
 const { Her } = require('./core');
 const qq = require('./qq/adapter');
 const qqConnect = require('./qq/connect');
-const radar = require('./radar');
 const attach = require('./attach');
 const { NAME_RE } = require('./plugins');
 const { readJson, ensureDir, truncate } = require('./util');
@@ -101,6 +98,47 @@ function readConfigFile() {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch (e) { return null; }
 }
 
+// 从 chat/completions 地址推出这一家的模型列表地址
+function modelsUrl(base) {
+  const s = String(base || '').trim().replace(/\/+$/, '');
+  if (/\/chat\/completions$/i.test(s)) return s.replace(/\/chat\/completions$/i, '/models');
+  if (/\/v1$/i.test(s)) return s + '/models';
+  return s + '/models';
+}
+
+// 拿不到列表时给的常见模型（只当建议，用户可以自己填）
+function presetModels(base) {
+  const b = String(base || '').toLowerCase();
+  if (b.indexOf('bigmodel') >= 0) return ['glm-4-flash', 'glm-4-air', 'glm-4-plus', 'glm-4v-flash'];
+  if (b.indexOf('deepseek') >= 0) return ['deepseek-chat', 'deepseek-reasoner'];
+  if (b.indexOf('siliconflow') >= 0) return ['Qwen/Qwen3-8B', 'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-7B-Instruct'];
+  if (b.indexOf('11434') >= 0 || b.indexOf('ollama') >= 0) return ['qwen3-8b', 'qwen2.5:7b'];
+  return [];
+}
+
+// 用这把 key 问服务商：你能用哪些模型（只说能问到的，问不到就给预设，绝不编）
+async function listModels(base, key) {
+  const url = modelsUrl(base);
+  const preset = presetModels(base);
+  try {
+    const headers = {};
+    if (key) headers.authorization = 'Bearer ' + key;
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) {
+      return { ok: false, error: '这家没给模型列表（HTTP ' + r.status + '）', models: preset, source: 'preset', url };
+    }
+    const j = await r.json();
+    let list = [];
+    if (Array.isArray(j.data)) list = j.data.map((x) => x.id || x.name).filter(Boolean);
+    else if (Array.isArray(j.models)) list = j.models.map((x) => x.id || x.name || x.model).filter(Boolean);
+    list = Array.from(new Set(list.map(String))).sort();
+    if (!list.length) return { ok: false, error: '接口通，但没返回模型名', models: preset, source: 'preset', url };
+    return { ok: true, models: list, source: 'list', url };
+  } catch (e) {
+    return { ok: false, error: e.message, models: preset, source: 'preset', url };
+  }
+}
+
 async function handleApi(req, res, url) {
   const p = url.pathname;
   if (p === '/api/chat' && req.method === 'POST') {
@@ -149,24 +187,24 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/selfcheck') return json(res, 200, her.selfcheck());
 
-  // ---------- 免费模型雷达（只读缓存；扫描在后台定时跑，不在请求里联网） ----------
-  if (p === '/api/radar' && req.method === 'GET') {
-    const pd = radar.pending(her.dataDir, { cfg });
-    return json(res, 200, {
-      ok: true,
-      enabled: pd.enabled,
-      configured: pd.configured,
-      at: pd.updated_at,
-      new: pd.items
-    });
-  }
-
-  if (p === '/api/radar/ack' && req.method === 'POST') {
+  // ---------- 用这把 key 能用的模型（接上密钥先问用哪个模型） ----------
+  if (p === '/api/models' && req.method === 'POST') {
+    if (!isLocal(req)) return denyRemote(res);
     const body = await readBody(req);
-    const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
-    if (body.all !== true && !ids.length) return json(res, 400, { ok: false, error: '要么给 ids 数组，要么 all:true' });
-    const r = radar.ack(her.dataDir, ids, body.all === true);
-    return json(res, 200, { ok: true, ack: r.acked, remaining: r.remaining });
+    let pr = body.provider || null;
+    const cfgNow = readConfigFile();
+    if (!pr && body.name && cfgNow) {
+      pr = (cfgNow.providers || []).filter((x) => x.name === String(body.name))[0] || null;
+    }
+    if (!pr && body.base) pr = { name: body.name || '', base: body.base, key: body.key || '' };
+    if (!pr || !pr.base) return json(res, 400, { ok: false, error: '缺 base（这一家的接口地址）' });
+    let key = String(pr.key || '');
+    if ((!key || key.indexOf('****') >= 0) && cfgNow) {
+      const hit = (cfgNow.providers || []).filter((x) => x.name === pr.name)[0];
+      if (hit) key = hit.key || '';
+    }
+    const out = await listModels(pr.base, key);
+    return json(res, 200, Object.assign({ provider: pr.name || '' }, out));
   }
 
   // ---------- 模型切换：改完立刻生效，不用重启 ----------
@@ -601,16 +639,6 @@ server.listen(PORT, HOST, () => {
   if (sc.warnings.length) sc.warnings.forEach((w) => console.log('  ! ' + w));
   if (cfg._missing_config) console.log('  ! 没有 config.json，正在用 config.example.json 的默认值（run.cmd 会自动复制一份）');
   console.log('');
-  // 免费模型雷达：启动后 60 秒跑一次，之后每 7 天一次；没配 sources 就等于不跑
-  const radarJob = radar.startSchedule({
-    cfg,
-    dataDir: her.dataDir,
-    onNew: (r) => console.log('  · 雷达：发现 ' + r.new.length + ' 个新的免费模型（在设置里看）')
-  });
-  if (radarJob) {
-    console.log('  · 雷达：已排期（' + Math.round(radarJob.delay / 1000) + ' 秒后首次扫描，之后每 '
-      + Math.round(radarJob.every / 86400000) + ' 天）');
-  }
   her.startIdleConsolidate((cfg.memory && cfg.memory.idleConsolidateMinutes) || 60);
 });
 

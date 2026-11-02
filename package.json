@@ -1,6 +1,6 @@
 {
   "name": "jingqian-single-a",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "鲸倩 · 单A 开源雏版：会记事、会算账、会动手，但手上有一条红线",
   "main": "src/server.js",
   "type": "commonjs",
