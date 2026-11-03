@@ -1825,11 +1825,16 @@ namespace JingqianShell
                 head.SetBounds(Dpi.X(18), Dpi.X(14), Dpi.X(304), Dpi.X(30));
                 f.Controls.Add(head);
 
+                Panel line = new Panel();
+                line.BackColor = Theme.Border;
+                line.SetBounds(Dpi.X(18), Dpi.X(46), Dpi.X(304), 1);
+                f.Controls.Add(line);
+
                 Label body = new Label();
                 body.Text = string.Join("\n", rows.ToArray())
                     + "\n\n近 7 天合计 ¥" + total.ToString("0.000")
                     + (resetAt.Length > 0 ? "\n上次重置：" + resetAt + "（只从那时起算）" : "");
-                body.SetBounds(Dpi.X(18), Dpi.X(50), Dpi.X(304), Dpi.X(150));
+                body.SetBounds(Dpi.X(18), Dpi.X(56), Dpi.X(304), Dpi.X(140));
                 f.Controls.Add(body);
 
                 Label note = new Label();
@@ -4940,6 +4945,11 @@ namespace JingqianShell
                     it.SubItems.Add(status);
                     it.SubItems.Add(perms);
                     it.SubItems.Add(desc);
+                    // 隔行淡色，长列表更好扫
+                    if (list.Items.Count % 2 == 1) it.BackColor = Color.FromArgb(248, 250, 252);
+                    if (err.Length > 0) it.ForeColor = Theme.Warn;
+                    else if (en && loaded) it.ForeColor = Theme.Text;
+                    else if (!en) it.ForeColor = Theme.Dim;
                     list.Items.Add(it);
                     names.Add(name);
                     enabledFlags.Add(en);
