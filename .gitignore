@@ -1,7 +1,7 @@
 # 你的密钥和本地数据不要进仓库
 config.json
 config.ci.json
-data/*
+data/
 !data/report.md
 !data/results.json
 !data/smoke.json
