@@ -22,8 +22,25 @@ foreach ($f in @('package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'config
   $p = Join-Path $repo $f
   if (Test-Path $p) { Copy-Item $p (Join-Path $out $f) -Force }
 }
+# batches-must-be-crlf: 批处理必须 CRLF + 无 BOM，否则 cmd.exe 把行读碎、双击闪退
+foreach ($f in @('启动鲸倩.cmd', '创建桌面快捷方式.cmd')) {
+  $p = Join-Path $out $f
+  if (Test-Path $p) {
+    $x = [IO.File]::ReadAllText($p)
+    $x = $x -replace "`r`n", "`n" -replace "`n", "`r`n"
+    [IO.File]::WriteAllText($p, $x, (New-Object System.Text.UTF8Encoding($false)))
+  }
+}
 # node 运行时：优先用本机装好的那份
 $nodeRuntime = Join-Path $env:LOCALAPPDATA 'Jingqian\runtime'
+# fallback-to-dist-runtime: 本机安装被删过时，用 dist 里旧包带的运行时
+if (-not (Test-Path $nodeRuntime)) {
+  $cand = Get-ChildItem (Join-Path $repo 'dist') -Directory -Filter 'jingqian-portable-*' -ErrorAction SilentlyContinue |
+    ForEach-Object { Join-Path $_.FullName 'runtime' } |
+    Where-Object { Test-Path (Join-Path $_ 'node-v22.14.0-win-x64\node.exe') } |
+    Select-Object -First 1
+  if ($cand) { $nodeRuntime = $cand }
+}
 if (-not (Test-Path $nodeRuntime)) {
   $cmd = Get-Command node -ErrorAction SilentlyContinue
   if ($cmd) {
