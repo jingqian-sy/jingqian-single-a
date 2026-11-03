@@ -229,6 +229,7 @@ async function main() {
     await stepAsync('22. 插件模组（装/启用/工具真跑/插件接口/按钮/无权限被拒/卸载）', () => node([path.join(__dirname, 'plugins-test.js')]));
     await stepAsync('23. 人称：第三人称存、第二人称用（库里不改原文）', () => node([path.join(__dirname, 'persona-test.js')]));
     await stepAsync('24. 记忆模型（层级 / 同义冲突去重 / 归属 / 分层召回）', () => node([path.join(__dirname, 'memory-model-test.js')]));
+    await stepAsync('25. 内置 MCP 客户端（默认关 / stdio 启动 / 前缀 / 真调用 / 拒绝裸命令）', () => node([path.join(__dirname, 'mcp-client-test.js')]));
 
     console.log('\n全部通过，用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
   } catch (e) {

@@ -53,6 +53,8 @@ const her = new Her({ root: ROOT, cfg });
 try { her.retryDistillQueue().catch(() => {}); } catch (e) {}
 // 记忆每日自动快照（每天第一次启动时做，留最近 7 份）
 try { her.snapshotMemory(); } catch (e) {}
+// MCP 客户端：配置了才启动，起不来只影响它自己的工具
+try { her.initMcp().catch(() => {}); } catch (e) {}
 let lastChat = null;
 const PORT = Number(process.env.PORT || cfg.port || 7889);
 const HOST = cfg.host || '127.0.0.1';

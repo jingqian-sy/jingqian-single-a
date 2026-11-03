@@ -163,5 +163,9 @@
   },
   "features": {
     "subagent": true
+  },
+  "mcp": {
+    "enabled": false,
+    "servers": []
   }
 }

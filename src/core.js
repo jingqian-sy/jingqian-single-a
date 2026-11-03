@@ -23,6 +23,7 @@ const { classify, scoreImportance } = require('./memory/classify');
 const { consolidate } = require('./memory/consolidate');
 const { Tools } = require('./tools');
 const { PluginHost } = require('./plugins');
+const { McpClient } = require('./mcp-client');
 const safety = require('./safety');
 const sandbox = require('./sandbox');
 const { readJson, writeJson, appendJsonl, ensureDir, nowIso, uid, truncate, tokenCount } = require('./util');
@@ -152,8 +153,30 @@ class Her {
       store: this.store
     });
     try { this.plugins.load(); } catch (e) { /* 插件加载失败不拖垮启动 */ }
+    // 内置 MCP 客户端：默认关，配置了才启动；启动是异步的，不挡开窗
+    this.mcp = new McpClient({ dataDir: this.dataDir, cfg: this.cfg });
+    this._mcpStarted = false;
     this._subRunning = false;
   }
+
+  // 由 server 启动时调一次；失败了只记日志，聊天照常（这一轮少几个工具而已）
+  async initMcp() {
+    if (this._mcpStarted) return 0;
+    this._mcpStarted = true;
+    if (!this.mcp.enabled()) return 0;
+    try {
+      const regs = await this.mcp.startAll();
+      for (const r of regs) {
+        try { this.tools.registerPluginTool(r.def, 'mcp:' + r.server, r.fn); }
+        catch (e) { /* 重名就跳过 */ }
+      }
+      return regs.length;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  closeMcp() { try { this.mcp.closeAll(); } catch (e) {} }
 
   embedFn() {
     const cfg = this.cfg.embedding || {};
