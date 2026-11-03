@@ -1,4 +1,4 @@
-# 鲸倩 Jīngqiàn · 单A 开源雏版
+﻿# 鲸倩 Jīngqiàn · 单A 开源雏版
 
 [![CI](https://github.com/jingqian-sy/jingqian-single-a/actions/workflows/ci.yml/badge.svg)](https://github.com/jingqian-sy/jingqian-single-a/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f6a.svg)](LICENSE)
@@ -24,19 +24,19 @@
 
 插件是「装一个小功能」，装上之后模型真的会调它——下面是随手记插件：
 
-![插件工具调用](docs/assets/能力-插件工具.png)
+![插件工具调用](docs/assets/cap-plugin.png)
 
 手上有一条红线：让它删 `C:\Windows`，它会先真的看一眼，然后拒绝，并给替代方案：
 
-![红线](docs/assets/能力-红线.png)
+![红线](docs/assets/cap-redline.png)
 
 破坏性操作先问你，不代你点头：
 
-![写文件要确认](docs/assets/能力-写文件确认.png)
+![写文件要确认](docs/assets/cap-confirm.png)
 
 插件在「插件」页里装、启停、卸载：
 
-![插件页](docs/assets/界面-插件页.png)
+![插件页](docs/assets/ui-plugins.png)
 
 ## 1.x：软件窗口就是全部（一个核、两个前端是 2.0 方向）
 
