@@ -24,7 +24,7 @@ function readCfg(cfg) {
   return {
     enabled: !!q.enabled,
     gateway: String(q.gateway || '').replace(/\/+$/, ''),
-    token: String(q.token || ''),
+    token: String(q.token || q.accessToken || ''),
     allow: (q.allow || []).map(String),
     groups: (q.groups || []).map(String),
     selfId: String(q.self_id || q.selfId || '')

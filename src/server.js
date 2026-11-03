@@ -55,6 +55,30 @@ try { her.retryDistillQueue().catch(() => {}); } catch (e) {}
 try { her.snapshotMemory(); } catch (e) {}
 // MCP 客户端：配置了才启动，起不来只影响它自己的工具
 try { her.initMcp().catch(() => {}); } catch (e) {}
+// OneBot WS 直连（SnowLuma / NapCat / LLOneBot 都讲这个）：配置 qq.kind=onebot-ws 才启动；默认 dryRun 只记不回
+let snowluma = null;
+try {
+  const q = cfg.qq || {};
+  if (q.enabled && (q.kind === 'onebot-ws' || q.kind === 'snowluma')) {
+    const { OneBotWsBridge } = require('./qq/onebot-ws');
+    if (q.httpUrl && !q.gateway) q.gateway = q.httpUrl;
+    snowluma = new OneBotWsBridge({
+      wsUrl: q.wsUrl || 'ws://127.0.0.1:3001',
+      token: q.accessToken || q.token || '',
+      dryRun: !!q.dryRun,
+      logFile: path.join(her.dataDir, 'qq-onebot-ws.log'),
+      onEvent: async (ev) => {
+        try {
+          const d = await qq.incoming({ cfg, her, dataDir: her.dataDir, ev });
+          if (d && d.ok && d.reply) {
+            await qq.send({ cfg, dataDir: her.dataDir, to: d.peer, text: d.reply, group: d.kind === 'group' });
+          }
+        } catch (e) { /* 单条失败不影响连接 */ }
+      }
+    });
+    snowluma.start();
+  }
+} catch (e) { console.log('  ! SnowLuma 桥接没起来：' + e.message); }
 let lastChat = null;
 const PORT = Number(process.env.PORT || cfg.port || 7889);
 const HOST = cfg.host || '127.0.0.1';
@@ -630,7 +654,12 @@ async function handleApi(req, res, url) {
         // QQ 适配层配置（默认关）：网关地址/令牌/白名单/群白名单
         next.qq = Object.assign({}, next.qq, {
           enabled: !!body.qq.enabled,
+          kind: body.qq.kind ? String(body.qq.kind) : String((next.qq && next.qq.kind) || 'onebot-http'),
           gateway: String(body.qq.gateway || ''),
+          wsUrl: body.qq.wsUrl !== undefined ? String(body.qq.wsUrl || '') : String((next.qq && next.qq.wsUrl) || ''),
+          httpUrl: body.qq.httpUrl !== undefined ? String(body.qq.httpUrl || '') : String((next.qq && next.qq.httpUrl) || ''),
+          accessToken: body.qq.accessToken !== undefined ? String(body.qq.accessToken || '') : String((next.qq && next.qq.accessToken) || ''),
+          dryRun: body.qq.dryRun !== undefined ? !!body.qq.dryRun : !!(next.qq && next.qq.dryRun),
           token: String(body.qq.token || ''),
           allow: Array.isArray(body.qq.allow) ? body.qq.allow.map(String) : ((next.qq && next.qq.allow) || []),
           groups: Array.isArray(body.qq.groups) ? body.qq.groups.map(String) : ((next.qq && next.qq.groups) || []),

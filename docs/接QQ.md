@@ -1,4 +1,4 @@
-# 接 QQ（可选）
+﻿# 接 QQ（可选）
 
 ## 一、默认不支持、默认关闭
 
@@ -57,7 +57,31 @@
 
 5. **审计**：每条收发都写 `data/qq.log`（时间、方向、对方、长度、40 字摘要），不记完整长文本。
 
-## 三、风险与限制
+## 三、OneBot WS 直连（SnowLuma / NapCat / LLOneBot 都行）
+
+除了 HTTP 推送，软件也能当 OneBot WS 客户端：网关主动推事件，软件连上去收。
+
+```json
+"qq": {
+  "enabled": true,
+  "kind": "onebot-ws",
+  "wsUrl": "ws://127.0.0.1:3001",
+  "httpUrl": "http://127.0.0.1:3000",
+  "accessToken": "网关的 access token",
+  "dryRun": true,
+  "allow": ["你的QQ号"],
+  "groups": []
+}
+```
+
+- `kind`：`onebot-http`（默认，原来的 HTTP 推送）或 `onebot-ws`（本机推荐 SnowLuma 就用这个）
+- `dryRun`：先设 `true` 只记录收到什么、不自动回，验证通了再改 `false`
+- 日志在 `data/qq-onebot-ws.log`（收到/断开/重连）和 `data/qq.log`（入/出）
+- 发送还是走 `httpUrl` 的 OneBot HTTP 动作（`/send_private_msg`、`/send_group_msg`），令牌用 `accessToken`
+
+**同一台机器别让两个桥同时回同一个号**：DSH 自带 QQ 桥 + 软件桥都连着，同一条消息会收到两份回复，二选一。
+
+## 四、风险与限制
 
 - **账号可能被风控**：QQ 对第三方机器人不友好，轻则限流，重则封号；
 - **别拿主号试**：用小号；出问题最多是小号掉线；
@@ -68,7 +92,7 @@
 - **命令仍走红线**：QQ 来的人最多只能聊天和触发普通工具，P0 直接拒、P1/P2 要确认，确认不了的不会执行；
 - 这层只做协议适配，不做风控绕过、不做多账号、不自动同意好友。
 
-## 四、一键连接（不用手填令牌）
+## 五、一键连接（不用手填令牌）
 
 软件版「设置 → QQ 一键连接」：
 

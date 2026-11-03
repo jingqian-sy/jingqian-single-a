@@ -129,12 +129,17 @@
   },
   "qq": {
     "enabled": false,
+    "kind": "onebot-http",
     "gateway": "",
     "token": "",
+    "wsUrl": "ws://127.0.0.1:3001",
+    "httpUrl": "http://127.0.0.1:3000",
+    "accessToken": "",
+    "dryRun": true,
     "allow": [],
     "groups": [],
     "self_id": "",
-    "note": "可选，默认关。gateway 是 OneBot HTTP 地址（如 http://127.0.0.1:5700）；allow 是允许私聊的 QQ 号；groups 是允许的群号；群里必须 @ 她或点名才回。"
+    "note": "可选，默认关。kind=onebot-http 时 gateway 填 OneBot HTTP 地址（如 http://127.0.0.1:5700）；kind=onebot-ws 时填 wsUrl/httpUrl/accessToken（SnowLuma、NapCat、LLOneBot 的 WS 都行），dryRun=true 只记录不自动回。allow 是允许私聊的 QQ 号；groups 是允许的群号；群里必须 @ 她或点名才回。"
   },
   "budget": {
     "perCallSeconds": 120,
