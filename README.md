@@ -1,4 +1,4 @@
-﻿# 鲸倩 Jīngqiàn · 单A 开源雏版
+# 鲸倩 Jīngqiàn · 单A 开源雏版
 
 [![CI](https://github.com/jingqian-sy/jingqian-single-a/actions/workflows/ci.yml/badge.svg)](https://github.com/jingqian-sy/jingqian-single-a/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2f6f6a.svg)](LICENSE)
@@ -19,6 +19,7 @@
 - 只能 Windows；`config.json` 里有你的 key 明文，别放进公用 U 盘/电脑
 
 想自己打包：`powershell -ExecutionPolicy Bypass -File tools\build-portable.ps1`，产物在 `dist\`。
+完整功能清单、本机实测数据、反馈方式与 2.0 预告见 [docs/RELEASE-1.0.0.md](docs/RELEASE-1.0.0.md)。
 
 ### 她能干什么（真窗口截图）
 
