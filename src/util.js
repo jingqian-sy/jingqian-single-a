@@ -97,7 +97,16 @@ function normalizeFact(s) {
     .trim();
 }
 
+function readJsonl(file) {
+  try {
+    return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+  } catch (e) { return []; }
+}
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
 module.exports = {
   nowIso, uid, readJson, writeJson, appendJsonl, ensureDir,
-  daysAgo, tokens, tokenCount, cosine, sim, truncate, normalizeFact
+  daysAgo, tokens, tokenCount, cosine, sim, truncate, normalizeFact, readJsonl, sleep
 };
