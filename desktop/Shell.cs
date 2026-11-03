@@ -158,6 +158,7 @@ namespace JingqianShell
     {
         public string BaseUrl;
         public string Session = "web";   // 当前会话 id（界面可以切）
+        public bool LastSuggestWork;     // 这轮她认出来是活儿，建议切工作模式
         readonly JavaScriptSerializer json = new JavaScriptSerializer();
 
         public ApiClient(string baseUrl)
@@ -258,6 +259,8 @@ namespace JingqianShell
             {
                 Dictionary<string, object> st = (Dictionary<string, object>)r["stats"];
                 stats = (st.ContainsKey("total_tokens") ? Convert.ToString(st["total_tokens"]) : "0") + " tokens";
+                object sm;
+                LastSuggestWork = st.TryGetValue("suggest_mode", out sm) && Convert.ToString(sm) == "work";
             }
             object tr;
             if (r.TryGetValue("trace", out tr) && tr is object[])
@@ -283,6 +286,8 @@ namespace JingqianShell
             {
                 Dictionary<string, object> st = (Dictionary<string, object>)r["stats"];
                 stats = (st.ContainsKey("total_tokens") ? Convert.ToString(st["total_tokens"]) : "0") + " tokens";
+                object sm;
+                LastSuggestWork = st.TryGetValue("suggest_mode", out sm) && Convert.ToString(sm) == "work";
             }
             object tr;
             if (r.TryGetValue("trace", out tr) && tr is object[])
@@ -2229,7 +2234,7 @@ namespace JingqianShell
                     + "推荐顺序：\n"
                     + "1）智谱 GLM-4-Flash —— 有免费额度，注册就能拿 key\n"
                     + "2）DeepSeek —— 便宜，几块钱能用很久\n"
-                    + "3）本机 Ollama —— 完全免费，但要先装\n\n"
+                    + "3）本机 Ollama —— 完全免费、不用 key，但要先装（装好后软件会自动认出来，不会再弹这个框）\n\n"
                     + "现在去填吗？填完关掉窗口重开就行。",
                     "鲸倩 · 第一次用", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
                 if (r == DialogResult.Yes) OpenSettings();
@@ -2585,6 +2590,28 @@ namespace JingqianShell
                         caption.Invalidate();
                         RefreshStats();
                         if (input != null) { input.Select(); input.Focus(); }
+                        // 她认出是活儿、建议切工作模式：直接问一句，点「是」就切（截图/自检时不弹）
+                        if (api.LastSuggestWork && string.IsNullOrEmpty(AutoShotPath))
+                        {
+                            DialogResult dr = MessageBox.Show(this,
+                                "这活儿要动手。现在切到工作模式吗？\n\n切过去，下一句就用能动手的模型做。",
+                                "鲸倩", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                            if (dr == DialogResult.Yes)
+                            {
+                                try
+                                {
+                                    Dictionary<string, object> mb = new Dictionary<string, object>();
+                                    mb["entry"] = "desktop";
+                                    mb["mode"] = "work";
+                                    api.Post("/api/mode", mb, 5000);
+                                    LoadRoute();
+                                    caption.StatusText = "已切到工作模式，再说一遍要做什么";
+                                    caption.Invalidate();
+                                }
+                                catch { }
+                            }
+                        }
+                        api.LastSuggestWork = false;
                         // 演示/自测：这一轮发完、工具小条和回复都上屏了，拍一张再关
                         if (!string.IsNullOrEmpty(AutoShotPath))
                         {
@@ -2824,6 +2851,14 @@ namespace JingqianShell
             title.SetBounds(Dpi.X(18), 0, Dpi.X(220), Dpi.X(46));
             title.MouseDown += DragDialog;
             headerPanel.Controls.Add(title);
+            Label novice = new Label();
+            novice.Text = "新手只用管：接模型 → 人格 → 保存；其他都可不动";
+            novice.AutoSize = false;
+            novice.Font = Theme.Ui(8.5f, false);
+            novice.ForeColor = Theme.Dim;
+            novice.TextAlign = ContentAlignment.MiddleLeft;
+            novice.SetBounds(Dpi.X(126), 0, Dpi.X(340), Dpi.X(46));
+            headerPanel.Controls.Add(novice);
 
             btnClose = new FlatBtn("×", Theme.Paper, Theme.Dim);
             btnClose.Font = Theme.Ui(13f, false);
