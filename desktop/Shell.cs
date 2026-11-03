@@ -2534,24 +2534,40 @@ namespace JingqianShell
             btnClose.Click += delegate { Close(); };
             headerPanel.Controls.Add(btnClose);
 
-            // 中控台：跳到设置页最下面的运行状态 + 选路 + 记忆参数
-            btnConsole = new FlatBtn("中控台", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
+            // 新手只看得到「更多」：中控台/人格/语音/功能收进菜单，别一上来四个按钮晃眼
+            btnConsole = new FlatBtn("更多", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
             btnConsole.Font = Theme.Ui(8.5f, true);
-            btnConsole.Click += delegate { ScrollToConsole(); };
+            ContextMenuStrip moreMenu = new ContextMenuStrip();
+            moreMenu.Font = Theme.Ui(9f, false);
+            ToolStripMenuItem miConsole = new ToolStripMenuItem("运行状态与参数");
+            miConsole.Click += delegate { ScrollToConsole(); };
+            ToolStripMenuItem miPersona = new ToolStripMenuItem("人格（她是谁、怎么说话）");
+            miPersona.Click += delegate { ScrollToPersona(); };
+            ToolStripMenuItem miVoice = new ToolStripMenuItem("语音（朗读与听写）");
+            miVoice.Click += delegate { ScrollToVoice(); };
+            ToolStripMenuItem miFeature = new ToolStripMenuItem("功能开关（触手/子智能体等）");
+            miFeature.Click += delegate { ScrollToFeatures(); };
+            moreMenu.Items.Add(miConsole);
+            moreMenu.Items.Add(miPersona);
+            moreMenu.Items.Add(miVoice);
+            moreMenu.Items.Add(miFeature);
+            btnConsole.Click += delegate (object s, EventArgs e)
+            {
+                moreMenu.Show(btnConsole, new Point(0, btnConsole.Height));
+            };
             headerPanel.Controls.Add(btnConsole);
 
+            // 兼容老代码里的引用：这几个按钮不再单独显示，但事件和滚动方法还在
             btnPersona = new FlatBtn("人格", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
-            btnPersona.Font = Theme.Ui(8.5f, true);
+            btnPersona.Visible = false;
             btnPersona.Click += delegate { ScrollToPersona(); };
             headerPanel.Controls.Add(btnPersona);
-
             btnVoiceNav = new FlatBtn("语音", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
-            btnVoiceNav.Font = Theme.Ui(8.5f, true);
+            btnVoiceNav.Visible = false;
             btnVoiceNav.Click += delegate { ScrollToVoice(); };
             headerPanel.Controls.Add(btnVoiceNav);
-
             btnFeatureNav = new FlatBtn("功能", Color.FromArgb(232, 243, 252), Theme.AccentDeep);
-            btnFeatureNav.Font = Theme.Ui(8.5f, true);
+            btnFeatureNav.Visible = false;
             btnFeatureNav.Click += delegate { ScrollToFeatures(); };
             headerPanel.Controls.Add(btnFeatureNav);
 
@@ -2697,7 +2713,7 @@ namespace JingqianShell
             contentPanel.Controls.Add(lblProviderHint);
 
             Section("选中的提供方", 14, 352);
-            Cap("base", 14, 382);
+            Cap("接口地址（base）", 14, 382);
             txtBase = Box(14, 402, 596);
             txtBase.AccessibleName = "cfgBase";
             Cap("模型", 14, 436);
@@ -2718,7 +2734,7 @@ namespace JingqianShell
             btnPickModel = SmallBtn("选模型…", 14, 480, 96, false);
             btnPickModel.Click += delegate { PickModel(true); };
 
-            Cap("档位", 14, 512);
+            Cap("计费档（免费/本地/付费）", 14, 512);
             cmbTier = new ComboBox();
             cmbTier.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbTier.Font = Theme.Ui(9.5f, false);
@@ -2729,7 +2745,7 @@ namespace JingqianShell
             cmbTier.AccessibleName = "cfgTier";
             contentPanel.Controls.Add(cmbTier);
 
-            Cap("沙盒档位", 184, 512);
+            Cap("命令沙盒", 184, 512);
             cmbSandbox = new ComboBox();
             cmbSandbox.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbSandbox.Font = Theme.Ui(9.5f, false);
@@ -2818,7 +2834,7 @@ namespace JingqianShell
             cmbRouteMode.Items.Add("cloud-first");
             contentPanel.Controls.Add(cmbRouteMode);
 
-            Cap("最大步数", 158, 996);
+            Cap("最多想几步", 158, 996);
             txtMaxSteps = Box(158, 1016, 60);
 
             chkEscalate = new CheckBox();
