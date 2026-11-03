@@ -49,6 +49,8 @@ function loadConfig() {
 const cfg = loadConfig();
 const CONFIG_FILE = process.env.JQ_CONFIG ? path.resolve(ROOT, process.env.JQ_CONFIG) : path.join(ROOT, 'config.json');
 const her = new Her({ root: ROOT, cfg });
+// 上次没提炼成的，服务起来后补一次（失败不丢、可追溯）
+try { her.retryDistillQueue().catch(() => {}); } catch (e) {}
 let lastChat = null;
 const PORT = Number(process.env.PORT || cfg.port || 7889);
 const HOST = cfg.host || '127.0.0.1';

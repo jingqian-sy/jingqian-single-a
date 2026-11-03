@@ -187,6 +187,42 @@ class Her {
   }
 
   // 丢历史之前先蒸馏：把旧对话里值得记的事实/约定捞出来存进记忆库，删了也不丢
+  // 蒸馏（提炼）过程写日志，失败进队列下次重试——别静默丢
+  distillLog(entry) {
+    try { appendJsonl(path.join(this.dataDir, 'distill.log'), Object.assign({ ts: nowIso() }, entry)); } catch (e) {}
+  }
+
+  queueFile() { return path.join(this.dataDir, 'distill-queue.json'); }
+
+  enqueueDistill(msgs, sessionId, err) {
+    try {
+      const q = readJson(this.queueFile(), { items: [] });
+      if (!Array.isArray(q.items)) q.items = [];
+      q.items.push({ at: nowIso(), session: sessionId || '', error: String(err || '').slice(0, 200), msgs: (msgs || []).slice(-20) });
+      if (q.items.length > 20) q.items = q.items.slice(-20);
+      writeJson(this.queueFile(), q);
+      this.distillLog({ event: '入队待重试', session: sessionId, error: String(err || '').slice(0, 200) });
+    } catch (e) {}
+  }
+
+  async retryDistillQueue() {
+    let q;
+    try { q = readJson(this.queueFile(), { items: [] }); } catch (e) { return 0; }
+    if (!q || !Array.isArray(q.items) || !q.items.length) return 0;
+    let left = [];
+    let done = 0;
+    for (const job of q.items) {
+      try {
+        const n = await this.distillOld(job.msgs || [], job.session || 'queue');
+        if (n >= 0) done++;
+        else left.push(job);
+      } catch (e) { left.push(job); }
+    }
+    writeJson(this.queueFile(), { items: left });
+    this.distillLog({ event: '队列重试', done, left: left.length });
+    return done;
+  }
+
   async distillOld(msgs, sessionId) {
     if (this.cfg.memory && this.cfg.memory.distillOnTrim === false) return 0;
     const text = (msgs || []).map(function (m) {
@@ -194,6 +230,7 @@ class Her {
     }).join('\n');
     if (!text.trim()) return 0;
     let items = [];
+    let failed = false;
     try {
       const res = await this.router.call([
         { role: 'system', content: '从这段对话里提炼值得长期记住的事。只保留：约定、偏好、忌口、重要日子、关系变化、明确的事实。'
@@ -204,7 +241,8 @@ class Her {
       const raw = String((res.json.choices && res.json.choices[0] && res.json.choices[0].message && res.json.choices[0].message.content) || '');
       const m = raw.match(/\[[\s\S]*\]/);
       if (m) items = JSON.parse(m[0]);
-    } catch (e) { items = []; }
+      else failed = true;
+    } catch (e) { items = []; failed = true; }
     const existing = (this.store && this.store.data && this.store.data.items) ? this.store.data.items : [];
     const norm = (x) => String(x || '').replace(/[\s，。、！？,.!?：:；;""'']/g, '').toLowerCase();
     const looksSameFact = (a, b) => {
@@ -230,14 +268,16 @@ class Her {
       try {
         const saved = this.store.add({
           text: t,
-          kind: (it && it.kind) || 'fact',
-          importance: (it && it.pinned) ? 3 : 2,
+          kind: classify(t),
+          importance: (it && it.pinned) ? 4 : scoreImportance(t, 'distill'),
           pinned: !!(it && it.pinned),
           source: 'distill:' + String(sessionId || 'default')
         });
         if (saved) n++;
       } catch (e) {}
     }
+    this.distillLog({ event: '蒸馏完成', session: sessionId, got: items.length, saved: n, failed });
+    if (failed) this.enqueueDistill(msgs, sessionId, '模型没给出可解析的 JSON');
     return n;
   }
 

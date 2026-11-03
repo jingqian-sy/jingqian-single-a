@@ -2642,6 +2642,8 @@ namespace JingqianShell
             Hint("服务地址一般不用改；改端口后要重启服务才生效。", 14, 94);
 
             Section("模型提供方", 14, 130);
+            FlatBtn btnGuide = SmallBtn("一键配模型", 150, 124, 120, true);
+            btnGuide.Click += delegate { OpenGuide(); };
             btnTestProv = SmallBtn("测试连接", 284, 124, 88, false);
             btnTestProv.Click += delegate { TestProvider(); };
             btnApplyKey = SmallBtn("申请密钥", 376, 124, 88, true);
@@ -3495,6 +3497,80 @@ namespace JingqianShell
             finally { btnPickModel.Enabled = true; }
         }
 
+        // 一键配模型：选一家 → 粘 key → 自动问模型 → 存好（小白只用走这一遍）
+        void OpenGuide()
+        {
+            Dictionary<string, object> cfgResp;
+            try { cfgResp = api.Get("/api/config", 8000); }
+            catch (Exception ex) { MessageBox.Show(this, "读不到配置：" + ex.Message, "一键配模型", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            object cfgObj;
+            Dictionary<string, object> cfgNow = null;
+            if (cfgResp.TryGetValue("config", out cfgObj)) cfgNow = cfgObj as Dictionary<string, object>;
+            if (cfgNow == null) { MessageBox.Show(this, "配置读不出来。", "一键配模型", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            object provObj;
+            List<Dictionary<string, object>> provs = new List<Dictionary<string, object>>();
+            if (cfgNow.TryGetValue("providers", out provObj) && provObj is object[])
+                foreach (object o in (object[])provObj)
+                {
+                    Dictionary<string, object> d = o as Dictionary<string, object>;
+                    if (d != null) provs.Add(d);
+                }
+            if (provs.Count == 0)
+            {
+                MessageBox.Show(this, "配置里一家提供方都没有，先在下面「新增」加一家。", "一键配模型", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string pickedName = "", pickedKey = "";
+            using (GuideForm f = new GuideForm(provs))
+            {
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                pickedName = f.PickedProvider;
+                pickedKey = f.KeyText;
+            }
+            if (pickedName.Length == 0) return;
+
+            Dictionary<string, object> target = provs.Find((x) => Convert.ToString(x.ContainsKey("name") ? x["name"] : "") == pickedName);
+            if (target == null) return;
+            if (pickedKey.Length > 0) target["key"] = pickedKey;
+
+            // 问这家能用哪些模型，挑第一个填上（问不到就让它自己手填）
+            string model = target.ContainsKey("model") ? Convert.ToString(target["model"]) : "";
+            if (model.Length == 0 || pickedKey.Length > 0)
+            {
+                try
+                {
+                    Dictionary<string, object> body = new Dictionary<string, object>();
+                    body["name"] = pickedName;
+                    body["base"] = Convert.ToString(target.ContainsKey("base") ? target["base"] : "");
+                    body["key"] = pickedKey;
+                    Dictionary<string, object> mr = api.Post("/api/models", body, 25000);
+                    object arr;
+                    if (mr.TryGetValue("models", out arr) && arr is object[] && ((object[])arr).Length > 0)
+                        model = Convert.ToString(((object[])arr)[0]);
+                }
+                catch { }
+            }
+            if (model.Length > 0) target["model"] = model;
+
+            Dictionary<string, object> save = new Dictionary<string, object>();
+            save["providers"] = provs.ToArray();
+            try
+            {
+                Dictionary<string, object> sr = api.Post("/api/config", save, 12000);
+                bool okNow = sr.ContainsKey("ok") && Convert.ToBoolean(sr["ok"]);
+                if (!okNow) { MessageBox.Show(this, "保存失败：" + (sr.ContainsKey("error") ? Convert.ToString(sr["error"]) : "未知"), "一键配模型", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "保存失败：" + ex.Message, "一键配模型", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            MessageBox.Show(this, "配好了：用「" + pickedName + "」" + (model.Length > 0 ? "，模型 " + model : "")
+                + "。\n关掉这个窗口重开（或者重启服务）就能说话。", "一键配模型", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Close();
+        }
+
         // 在设置页直接测当前这家能不能通（新手填完 key 最想确认这个）
         void TestProvider()
         {
@@ -4346,6 +4422,35 @@ namespace JingqianShell
                 }
             }
             catch (Exception ex) { Console.WriteLine("TUTORIAL SHOT FAIL " + ex.Message); }
+            try
+            {
+                Dictionary<string, object> cr = api.Get("/api/config", 8000);
+                Dictionary<string, object> cn = cr.ContainsKey("config") ? cr["config"] as Dictionary<string, object> : null;
+                List<Dictionary<string, object>> ps = new List<Dictionary<string, object>>();
+                object pv;
+                if (cn != null && cn.TryGetValue("providers", out pv) && pv is object[])
+                    foreach (object o in (object[])pv)
+                    {
+                        Dictionary<string, object> d = o as Dictionary<string, object>;
+                        if (d != null) ps.Add(d);
+                    }
+                if (ps.Count > 0)
+                {
+                    using (GuideForm gf = new GuideForm(ps))
+                    {
+                        gf.StartPosition = FormStartPosition.Manual;
+                        gf.Location = new Point(-30000, -30000);
+                        gf.ShowInTaskbar = false;
+                        gf.Show();
+                        Application.DoEvents();
+                        Thread.Sleep(400);
+                        Application.DoEvents();
+                        Shot(gf, Path.Combine(repo, "data", "_ui_guide.png"));
+                        gf.Hide();
+                    }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("GUIDE SHOT FAIL " + ex.Message); }
             return 0;
         }
 
@@ -4505,6 +4610,94 @@ namespace JingqianShell
             tip.Font = Theme.Ui(8f, false);
             tip.SetBounds(Dpi.X(22), Dpi.X(472), Dpi.X(300), Dpi.X(22));
             Controls.Add(tip);
+        }
+    }
+
+    // ===================== 一键配模型：选一家 + 粘 key =====================
+    class GuideForm : Form
+    {
+        public string PickedProvider = "";
+        public string KeyText = "";
+        readonly ListBox list;
+        readonly TextBox keyBox;
+
+        public GuideForm(List<Dictionary<string, object>> provs)
+        {
+            Text = "一键配模型";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            ShowInTaskbar = false;
+            Font = Theme.Ui(9f, false);
+            BackColor = Theme.Paper;
+            ClientSize = new Size(Dpi.X(460), Dpi.X(400));
+
+            Label head = new Label();
+            head.Text = "两步：选一家，粘上 key";
+            head.Font = Theme.Ui(12f, true);
+            head.ForeColor = Theme.Text;
+            head.SetBounds(Dpi.X(20), Dpi.X(16), Dpi.X(420), Dpi.X(26));
+            Controls.Add(head);
+
+            Label sub = new Label();
+            sub.Text = "地址和模型我自动填，你只要粘 key。没有 key 就去官网申请，免费额度一般够用。";
+            sub.ForeColor = Theme.Dim;
+            sub.Font = Theme.Ui(8.5f, false);
+            sub.SetBounds(Dpi.X(20), Dpi.X(44), Dpi.X(420), Dpi.X(36));
+            Controls.Add(sub);
+
+            list = new ListBox();
+            list.Font = Theme.Ui(9.5f, false);
+            list.BorderStyle = BorderStyle.FixedSingle;
+            list.SetBounds(Dpi.X(20), Dpi.X(86), Dpi.X(420), Dpi.X(170));
+            foreach (Dictionary<string, object> p in provs)
+            {
+                string name = p.ContainsKey("name") ? Convert.ToString(p["name"]) : "";
+                string key = p.ContainsKey("key") ? Convert.ToString(p["key"]) : "";
+                bool filled = key.Length > 0;
+                list.Items.Add(name + (filled ? "（已填）" : "（未填）"));
+            }
+            if (list.Items.Count > 0) list.SelectedIndex = 0;
+            Controls.Add(list);
+
+            Label cap = new Label();
+            cap.Text = "粘 key（这家的密钥）：";
+            cap.ForeColor = Theme.Dim;
+            cap.SetBounds(Dpi.X(20), Dpi.X(268), Dpi.X(200), Dpi.X(20));
+            Controls.Add(cap);
+
+            keyBox = new TextBox();
+            keyBox.Font = Theme.Ui(9.5f, false);
+            keyBox.BorderStyle = BorderStyle.FixedSingle;
+            keyBox.BackColor = Color.White;
+            keyBox.SetBounds(Dpi.X(20), Dpi.X(290), Dpi.X(420), Dpi.X(26));
+            keyBox.UseSystemPasswordChar = false;
+            Controls.Add(keyBox);
+
+            FlatBtn ok = new FlatBtn("配好了", Theme.Accent, Color.White);
+            ok.Font = Theme.Ui(9.5f, true);
+            ok.SetBounds(Dpi.X(460 - 20 - 110), Dpi.X(340), Dpi.X(110), Dpi.X(32));
+            ok.Click += delegate { Accept(); };
+            Controls.Add(ok);
+
+            FlatBtn cancel = new FlatBtn("取消", Color.White, Theme.AccentDeep);
+            cancel.NormalBorder = Theme.Border;
+            cancel.Font = Theme.Ui(9.5f, false);
+            cancel.SetBounds(Dpi.X(460 - 20 - 110 - 10 - 90), Dpi.X(340), Dpi.X(90), Dpi.X(32));
+            cancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
+            Controls.Add(cancel);
+        }
+
+        void Accept()
+        {
+            if (list.SelectedIndex < 0) return;
+            string label = Convert.ToString(list.SelectedItem);
+            int cut = label.IndexOf('（');
+            PickedProvider = cut > 0 ? label.Substring(0, cut) : label;
+            KeyText = keyBox.Text.Trim();
+            DialogResult = DialogResult.OK;
+            Close();
         }
     }
 
