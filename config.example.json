@@ -1,6 +1,12 @@
 {
   "port": 7889,
   "host": "127.0.0.1",
+  "mode": "chat",
+  "modes": {
+    "desktop": "chat",
+    "qq": "work",
+    "mcp": "work"
+  },
   "providers": [
     {
       "name": "zhipu",

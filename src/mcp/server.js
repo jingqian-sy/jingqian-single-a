@@ -36,7 +36,9 @@ async function http(method, p, body, timeoutMs) {
 
 async function ensureService() {
   try { await http('GET', '/api/selfcheck', null, 1500); return; } catch (e) { /* 服务没起 */ }
-  const node = process.env.JINGQIAN_NODE || 'node';
+  // 默认用「正在跑这个脚本的那个 node」：客户端配置里写的是 node 绝对路径时，
+  // PATH 里不一定有 node，写死的 'node' 会 ENOENT，服务永远拉不起来。
+  const node = process.env.JINGQIAN_NODE || process.execPath;
   const child = spawn(node, [path.join(ROOT, 'src', 'server.js')], {
     cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true
   });
@@ -87,7 +89,7 @@ const TOOLS = [
 async function callTool(name, args) {
   args = args || {};
   if (name === 'ask') {
-    const r = await http('POST', '/api/chat', { message: String(args.text || ''), session: args.session || 'mcp' });
+    const r = await http('POST', '/api/chat', { message: String(args.text || ''), session: args.session || 'mcp', entry: 'mcp' });
     if (!r.ok) throw new Error(r.error || '服务返回失败');
     return '她说：' + r.reply;
   }
@@ -109,12 +111,17 @@ async function callTool(name, args) {
   }
   if (name === 'stats') {
     const r = await http('GET', '/api/stats', null, 8000);
-    const t = (r.ledger_today && r.ledger_today) || {};
+    const memCount = (r.memory && r.memory.count !== undefined) ? r.memory.count : (r.memory || 0);
     return JSON.stringify({
-      providers: r.providers,
-      today_calls: t.calls || 0,
-      today_tokens: (t.tokens !== undefined ? t.tokens : ((t.prompt_tokens || 0) + (t.completion_tokens || 0))),
-      memory: (r.memory && r.memory.count) || 0
+      service_up: true,
+      service_url: BASE,
+      uptime_s: (r.server && r.server.uptime_s) || null,
+      providers: (r.providers || []).map((p) => p.name + '/' + (p.model || '') + (p.ready ? ' 就绪' : ' 未就绪')),
+      today_calls: Number(r.today_calls || 0),
+      today_tokens: Number(r.today_tokens || 0),
+      memory_count: Number(memCount) || 0,
+      memory: Number(memCount) || 0,   // 老客户端认这个字段，留着兼容
+      memory_note: '这是本机服务自己的记忆库。干净版/新装的库是 0 条，属于正常；0 不代表记忆服务坏了。'
     }, null, 2);
   }
   throw new Error('没有这个工具：' + name);

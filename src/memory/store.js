@@ -63,9 +63,13 @@ class Store {
       this.save();
       return dup;
     }
-    // 冲突检查：同义但主语不同，只留说「用户/老爸」那条
+    // 冲突检查：同义但主语不同，只留说「用户/老爸」那条。
+    // 只在同一个人名下比：老王家的猫和大人的猫都叫团子，不能互相顶掉。
+    const newPerson = (input && input.person) || 'owner';
     const sKey = this.subjectlessKey(text);
-    const conflict = this.data.items.find((x) => x.status !== 'archived' && this.subjectlessKey(x.text) === sKey);
+    const conflict = this.data.items.find((x) => x.status !== 'archived'
+      && (x.person || 'owner') === newPerson
+      && this.subjectlessKey(x.text) === sKey);
     const hisNow = /^(用户|老爸)/.test(text);
     if (conflict && hisNow && !/^(用户|老爸)/.test(conflict.text)) {
       conflict.status = 'archived';

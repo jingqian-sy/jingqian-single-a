@@ -80,7 +80,12 @@ async function incoming(opts) {
     logLine(dataDir, { dir: 'out', ok: true, kind: d.kind, peer: d.peer, fixed: 'danger' });
     return { ok: true, reply: DANGER_REPLY, fixed: true };
   }
-  const r = await her.chat(text, { sessionId: d.session });
+  const sender = (ev && ev.sender) || {};
+  const speakerName = String(sender.card || sender.nickname || sender.user_id || '').trim();
+  const speaker = d.kind === 'group' && speakerName
+    ? { id: String((ev && ev.user_id) || ''), name: speakerName.slice(0, 40), owner: q.allow.includes(String(ev && ev.user_id)) }
+    : undefined;
+  const r = await her.chat(text, { sessionId: d.session, speaker: speaker, entry: 'qq' });
   logLine(dataDir, { dir: 'out', ok: true, kind: d.kind, peer: d.peer, len: String(r.reply || '').length });
   return { ok: true, reply: r.reply, kind: d.kind, peer: d.peer };
 }

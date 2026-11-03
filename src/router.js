@@ -30,21 +30,38 @@ function dayKey() {
 }
 
 // 全挂的时候说人话：别把一串 HTTP 400 甩给用户
+// 一条错误先归个类，再说人话：不要因为清单里有一家 401，就把「连不上」也说成 key 不对。
+function failureReason(errorText) {
+  const e = String(errorText || '');
+  if (/\b401\b|\b403\b|unauthor|invalid.*key|鉴权|no permission|api.?key/i.test(e)) return 'key 不对或没权限';
+  if (/\b402\b|\b429\b|quota|rate.?limit|insufficient|balance|额度|频率|余额/i.test(e)) return '额度或频率用完了';
+  if (/timeout|ECONN|ENOTFOUND|EAI_AGAIN|fetch failed|socket|网络|abort/i.test(e)) return '连不上';
+  if (/\b5\d\d\b|internal server|bad gateway|service unavailable|服务器/i.test(e)) return '服务器出错';
+  if (/空回复|empty/i.test(e)) return '回了空的';
+  return '失败';
+}
+
 function explainFailures(tried) {
   const list = Array.isArray(tried) ? tried : [];
-  const errs = list.map((t) => String(t.error || ''));
-  const names = list.map((t) => t.provider).filter(Boolean).join('、') || '所有模型';
-  const hit = (re) => errs.some((e) => re.test(e));
-  if (hit(/401|403|unauthor|invalid.*key|鉴权|no permission/i)) {
-    return '几家都说 key 不对或没权限（' + names + '）。去设置里核对密钥，或者先换一家能用的。';
+  const any = list.length === 1 ? '这家' : '几家';
+  const quant = list.length === 1 ? '' : '都';
+  const rows = list.map((t) => ({ name: String(t.provider || ''), reason: failureReason(t.error) }));
+  const names = rows.map((r) => r.name).filter(Boolean).join('、') || '所有模型';
+  if (!rows.length) return '没有哪家能接上。先看看网络，再去设置里确认模型接好了。';
+  const kinds = rows.map((r) => r.reason);
+  const uniq = Array.from(new Set(kinds));
+  if (uniq.length === 1) {
+    const kind = uniq[0];
+    if (kind === 'key 不对或没权限') return any + quant + '说 key 不对或没权限（' + names + '）。去设置里核对密钥，或者先换一家能用的。';
+    if (kind === '额度或频率用完了') return any + quant + '说额度或频率用完了（' + names + '）。等一会儿再试，或者在设置里换一家。';
+    if (kind === '连不上') return any + quant + '连不上（' + names + '）。看一下网络，或者本机 Ollama 起来没有。';
+    if (kind === '服务器出错') return any + quant + '的服务器出错了（' + names + '）。多半是对方临时抽风，过几分钟再试。';
+    if (kind === '回了空的') return any + quant + '回了空话（' + names + '）。换个说法再问一次试试。';
+    return any + quant + '失败了（' + names + '）。' + (list[0].error ? '第一家的说法：' + String(list[0].error).slice(0, 80) : '');
   }
-  if (hit(/429|quota|rate.?limit|额度|频率|余额/i)) {
-    return '几家都说额度或频率用完了（' + names + '）。等一会儿再试，或者在设置里换一家。';
-  }
-  if (hit(/timeout|ECONN|fetch failed|ENOTFOUND|网络|abort/i)) {
-    return '几家都连不上（' + names + '）。看一下网络，或者本机 Ollama 起来没有。';
-  }
-  return '几家都失败了（' + names + '）。' + (errs[0] ? '第一家的说法：' + errs[0] : '');
+  // 原因不一样：谁哪样说清楚，别一句「都失败了」糊过去
+  const detail = rows.map((r) => (r.name ? r.name + '：' : '') + r.reason).join('；');
+  return any + quant + '失败了（' + detail + '）。连不上的查网络，key 不对的核对密钥。';
 }
 
 class Router {
@@ -110,6 +127,7 @@ class Router {
       keyed: !!(p.key && String(p.key).trim()),
       free: (Number(p.price_in) || 0) === 0 && (Number(p.price_out) || 0) === 0,
       vision: !!p.vision,
+      tools: p.tools !== false,
       enabled: p.enabled !== false
     }));
   }
@@ -117,6 +135,9 @@ class Router {
   routeState() {
     const quotaInfo = this.lastQuota;
     return {
+      mode: (this.cfg && this.cfg.modes && (this.cfg.modes.desktop === 'chat' || this.cfg.modes.desktop === 'work'))
+        ? this.cfg.modes.desktop
+        : (this.cfg && this.cfg.mode === 'chat' ? 'chat' : 'work'),
       route: { mode: this.route.mode || 'cheap-first', order: this.route.order || [], escalate: this.route.escalate !== false },
       providers: this.providerInfo(),
       last: this.last,
@@ -220,17 +241,34 @@ class Router {
 
   async call(messages, tools, opts) {
     opts = opts || {};
+    const needTools = !!(tools && tools.length);
+    // 干活模式里固定了一家不带工具的：直接说清楚，别偷偷换别家答
+    if (needTools) {
+      const pinName = (this.route.mode === 'fixed' && (this.route.order || [])[0]) || '';
+      const pin = pinName ? this.providers.filter((p) => p.name === pinName)[0] : null;
+      if (pin && this.ready(pin) && pin.tools === false) {
+        const err = new Error('你选的「' + pinName + '」不支持工具，干活模式用不了它。换一家带工具的（DeepSeek 或本机工具版 Ollama），或者切回对话模式。');
+        err.code = 'NO_PROVIDER';
+        throw err;
+      }
+    }
     let list = this.candidates(opts.taskText || '', {
-      needTools: !!(tools && tools.length),
+      needTools: needTools,
       contextChars: opts.contextChars,
       prefer: opts.prefer
     });
     // 带图片的这轮只找声明了 vision 的提供方，别的家不硬塞（塞了也是 400）
     if (opts.requireVision) list = list.filter((p) => p.vision);
     if (!list.length) {
-      const err = new Error(opts.requireVision
-        ? '带图片的这轮需要支持视觉的提供方（provider 上写 "vision": true），现在没有可用的。'
-        : '没有可用的模型：请在 config.json 的 providers 里填一家云端 key，或者本机起一个 Ollama。');
+      let msg;
+      if (opts.requireVision) {
+        msg = '带图片的这轮需要支持视觉的提供方（provider 上写 "vision": true），现在没有可用的。';
+      } else if (needTools) {
+        msg = '没有能动手的模型：现在能用的家里没有支持工具调用的。接一家 DeepSeek 或本机工具版 Ollama，或者切回对话模式。';
+      } else {
+        msg = '还没有能用的模型：去设置里点「一键配模型」接一家（智谱有免费额度），或者本机开 Ollama。';
+      }
+      const err = new Error(msg);
       err.code = opts.requireVision ? 'NO_VISION' : 'NO_PROVIDER';
       throw err;
     }

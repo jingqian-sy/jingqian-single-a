@@ -28,7 +28,7 @@ function forPrompt(text) {
 function kindOf(text) {
   const t = String(text || '').trim();
   if (/^用户|^老爸|^他(的|叫|喜欢|讨厌|爱|在|是|有|住)/.test(t)) return 'his';
-  if (/^我/.test(t)) return 'self';
+  if (/^我|^你/.test(t)) return 'self';
   return 'echo';
 }
 
@@ -131,6 +131,7 @@ async function recall(store, query, opts) {
         id: it.id, text: it.text, kind: it.kind, importance: it.importance,
         pinned: !!it.pinned, score: Math.round(x.score * 1000) / 1000,
         tier: it.tier || 'cue',
+        person: it.person || 'owner',
         via: x.base > 0 ? (usedVector ? 'keyword+vector' : 'keyword') : (usedVector ? 'vector' : 'pinned')
       };
     })
@@ -141,14 +142,25 @@ async function recall(store, query, opts) {
   if (hits.length) store.markUsed(hits.map((h) => h.id));
 
   // 分两类拼：他的事实优先；她自己的回忆/聊天片段单独一段，并说清「不是事实」
-  const his = hits.filter((h) => kindOf(h.text) === 'his');
-  const own = hits.filter((h) => kindOf(h.text) !== 'his');
-  const line = (h) => '- ' + (h.pinned ? '★' : '') + forPrompt(truncate(h.text, 160));
+  // 「他的事实」不能只看开头有没有「用户/老爸」：主人名下、没写主语的事实（「周末去打球」）
+  // 也得算他的，不然问起来会被当成她自己的事，答「没记着」。
+  const hisLike = (h) => kindOf(h.text) === 'his'
+    || ((h.person || 'owner') === 'owner' && kindOf(h.text) !== 'self' && !/^她/.test(String(h.text || '').trim()));
+  const his = hits.filter(hisLike);
+  // 别人名下的事：既不是他的事实，也不是她俩的回忆，单独一段，别让模型张冠李戴
+  const other = hits.filter((h) => !hisLike(h) && (h.person || 'owner') !== 'owner' && kindOf(h.text) !== 'self');
+  const own = hits.filter((h) => !hisLike(h) && other.indexOf(h) < 0);
+  const hisLine = (h) => '- ' + (h.pinned ? '★' : '') + forPrompt(truncate(h.text, 160));
   const parts = [];
-  if (his.length) parts.push('【关于他的事实】\n' + his.map(line).join('\n'));
+  if (his.length) parts.push('【关于他的事实】\n' + his.map(hisLine).join('\n'));
+  // 别人名下的事：既不是他的事实，也不是她俩的回忆，单独一段
+  if (other.length) {
+    parts.push('【关于别人】（不是他本人的事，问到就按人名对号，别当他的事说）\n'
+      + other.slice(0, 3).map(hisLine).join('\n'));
+  }
   if (own.length) {
     parts.push('【你俩之间的回忆片段】（她当时的话或情绪，不是关于他的事实，别当成事实照搬）\n'
-      + own.slice(0, 3).map(line).join('\n'));
+      + own.slice(0, 3).map(hisLine).join('\n'));
   }
   const block = parts.join('\n\n');
   return { hits, used_vector: usedVector, block };

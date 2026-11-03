@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { URL } = require('url');
-const { Her } = require('./core');
+const { Her, toUserFact } = require('./core');
 const qq = require('./qq/adapter');
 const qqConnect = require('./qq/connect');
 const attach = require('./attach');
@@ -122,6 +122,19 @@ function presetModels(base) {
   return [];
 }
 
+// 问模型列表失败时也给人话：401 就说 key，别让人对着「HTTP 401」猜
+function explainModelListError(status, raw) {
+  const st = Number(status) || 0;
+  if (st === 401 || st === 403) return 'key 不对或没权限（这家回 ' + st + '）。粘 key 时别带空格，也别用别人的 key。';
+  if (st === 402) return '这家账户余额不足（402）。去这家后台充点，或者先换一家。';
+  if (st === 404) return '这家没有「列模型」的接口（404）。可以直接手填模型名，不影响用。';
+  if (st === 429) return '这家在限流（429）。等一分钟再试。';
+  if (st >= 500) return '这家服务器出错了（' + st + '）。过几分钟再试。';
+  const msg = String(raw || '');
+  if (/timeout|fetch failed|ENOTFOUND|ECONN|EAI_AGAIN|网络|abort/i.test(msg)) return '连不上这家的服务器。看一下网络，或核对接口地址。';
+  return '这家没给模型列表（HTTP ' + st + '）。';
+}
+
 // 用这把 key 问服务商：你能用哪些模型（只说能问到的，问不到就给预设，绝不编）
 async function listModels(base, key) {
   const url = modelsUrl(base);
@@ -131,17 +144,17 @@ async function listModels(base, key) {
     if (key) headers.authorization = 'Bearer ' + key;
     const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
     if (!r.ok) {
-      return { ok: false, error: '这家没给模型列表（HTTP ' + r.status + '）', models: preset, source: 'preset', url };
+      return { ok: false, error: explainModelListError(r.status, ''), models: preset, source: 'preset', url };
     }
     const j = await r.json();
     let list = [];
     if (Array.isArray(j.data)) list = j.data.map((x) => x.id || x.name).filter(Boolean);
     else if (Array.isArray(j.models)) list = j.models.map((x) => x.id || x.name || x.model).filter(Boolean);
     list = Array.from(new Set(list.map(String))).sort();
-    if (!list.length) return { ok: false, error: '接口通，但没返回模型名', models: preset, source: 'preset', url };
+    if (!list.length) return { ok: false, error: '接口通了，但这家没返回模型名。可以直接手填一个。', models: preset, source: 'preset', url };
     return { ok: true, models: list, source: 'list', url };
   } catch (e) {
-    return { ok: false, error: e.message, models: preset, source: 'preset', url };
+    return { ok: false, error: explainModelListError(0, e.message), models: preset, source: 'preset', url };
   }
 }
 
@@ -168,7 +181,12 @@ async function handleApi(req, res, url) {
       const r = await her.chat(String(body.message || ''), {
         sessionId: body.session || 'web',
         attachBlock: at ? at.block : '',
-        images: at ? at.images : []
+        images: at ? at.images : [],
+        mode: body.mode === 'chat' || body.mode === 'work' ? body.mode : undefined,
+        entry: ['desktop', 'qq', 'mcp'].indexOf(String(body.entry || '')) >= 0 ? String(body.entry) : 'desktop',
+        speaker: (body.speaker && typeof body.speaker === 'object')
+          ? { id: String(body.speaker.id || ''), name: String(body.speaker.name || '').slice(0, 40), owner: !!body.speaker.owner }
+          : undefined
       });
       // 给软件版底部数据栏用的「真实」最后一次调用数据（没有的字段不硬造）
       lastChat = {
@@ -243,6 +261,37 @@ async function handleApi(req, res, url) {
     her.router.setRoute(cur.route);
     her.router.routeLog('切换模型', { mode: cur.route.mode, order: cur.route.order });
     return json(res, 200, Object.assign({ ok: true, applied: true, restartNeeded: false }, her.router.routeState()));
+  }
+
+  // ---------- 对话 / 工作 模式：三个入口各管各的，热切换不用重启 ----------
+  const modeEntry = (v) => (['desktop', 'qq', 'mcp'].indexOf(String(v || '')) >= 0 ? String(v) : 'desktop');
+  if (p === '/api/mode' && req.method === 'GET') {
+    const entry = modeEntry(url.searchParams.get('entry'));
+    return json(res, 200, { ok: true, entry, mode: her.modeFor(entry), modes: her.cfg.modes || {} });
+  }
+  if (p === '/api/mode' && req.method === 'POST') {
+    if (!isLocal(req)) return denyRemote(res);
+    const body = await readBody(req);
+    const entry = modeEntry(body.entry);
+    const mode = String(body.mode || '');
+    if (mode !== 'chat' && mode !== 'work') {
+      return json(res, 400, { ok: false, error: '模式只能是 chat（对话）或 work（工作）' });
+    }
+    let cur;
+    try { cur = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); }
+    catch (e) { return json(res, 500, { ok: false, error: 'config.json 读不出来' }); }
+    cur.modes = Object.assign({}, cur.modes, { [entry]: mode });
+    if (entry === 'desktop') cur.mode = mode;   // 老字段留着，旧版本也读得懂
+    try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cur, null, 2), 'utf8'); }
+    catch (e) { return json(res, 500, { ok: false, error: '存模式失败：' + e.message }); }
+    her.cfg.modes = cur.modes;
+    if (entry === 'desktop') her.cfg.mode = mode;
+    try { her.resetSessionProviders(); } catch (e) {}
+    her.router.routeLog('切换模式', { entry, mode });
+    return json(res, 200, {
+      ok: true, applied: true, restartNeeded: false, entry, mode, modes: cur.modes,
+      label: (entry === 'desktop' ? '' : entry + ' ') + (mode === 'chat' ? '对话模式' : '工作模式')
+    });
   }
 
   // ---------- 账单：今日/近 N 天 + 重置（只打水位，不删原账） ----------
@@ -329,6 +378,20 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (p === '/api/sessions' && req.method === 'DELETE') {
+    if (!isLocal(req)) return denyRemote(res);
+    const id = String(url.searchParams.get('id') || '').trim();
+    if (!/^[A-Za-z0-9_.-]{1,80}$/.test(id)) return json(res, 400, { ok: false, error: '会话 id 不合法' });
+    const dir = path.join(her.dataDir, 'sessions');
+    const file = path.join(dir, id + '.json');
+    if (path.dirname(file) !== dir) return json(res, 400, { ok: false, error: '会话 id 不合法' });
+    let existed = false;
+    try { fs.unlinkSync(file); existed = true; }
+    catch (e) { return json(res, 200, { ok: false, error: '这个会话已经不在了，刷新一下列表看看' }); }
+    try { fs.unlinkSync(path.join(dir, id + '.summary.md')); } catch (e) {}
+    return json(res, 200, { ok: true, deleted: id, existed });
+  }
+
   // ---------- 人物表（认人用；默认 owner=老爸） ----------
   if (p === '/api/people' && req.method === 'GET') {
     return json(res, 200, { ok: true, people: her.people.list() });
@@ -341,7 +404,7 @@ async function handleApi(req, res, url) {
   }
 
   if (p === '/api/memory' && req.method === 'GET') {
-    const q = url.searchParams.get('query');
+    const q = String(url.searchParams.get('query') || '').slice(0, 500);
     const person = url.searchParams.get('person');
     if (q) {
       const r = await her.recallBlock(q);
@@ -349,13 +412,27 @@ async function handleApi(req, res, url) {
     }
     let items = her.store.active();
     if (person) items = items.filter((x) => (x.person || 'owner') === person);
-    return json(res, 200, { ok: true, count: items.length, people: her.people.list(), items: items.slice(-50).reverse() });
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
+    const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
+    const all = items.slice().reverse();
+    return json(res, 200, {
+      ok: true,
+      count: all.length,
+      total: all.length,
+      offset,
+      limit,
+      people: her.people.list(),
+      items: all.slice(offset, offset + limit)
+    });
   }
 
   if (p === '/api/memory' && req.method === 'POST') {
     const body = await readBody(req);
     if (!body.text) return json(res, 400, { ok: false, error: '缺少 text' });
-    const it = her.store.add({ text: body.text, kind: body.kind, importance: body.importance, pinned: body.pinned, source: 'api' });
+    // 走和自动记忆同一套人称：接口塞进来的「我的…」也要落成「用户的…」，
+    // 否则会被当成鲸倩自己的事，问起来反而说「没记着」。
+    const text = toUserFact(String(body.text));
+    const it = her.store.add({ text, kind: body.kind, importance: body.importance, pinned: body.pinned, source: 'api' });
     try { her.events.build(her.store); } catch (e) {}
     return json(res, 200, { ok: true, item: it });
   }
@@ -417,7 +494,7 @@ async function handleApi(req, res, url) {
   // ---------- 会话列表：能翻以前的对话、按关键词搜 ----------
   if (p === '/api/sessions') {
     const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 200);
-    const query = String(url.searchParams.get('query') || '').trim().toLowerCase();
+    const query = String(url.searchParams.get('query') || '').trim().toLowerCase().slice(0, 200);
     const dir = path.join(her.dataDir, 'sessions');
     let items = [];
     let files = [];
@@ -460,16 +537,18 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/history') {
     const limit = Math.min(Number(url.searchParams.get('limit')) || 40, 200);
+    const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
     let msgs = [];
     try {
       const f = path.join(her.dataDir, 'sessions', (url.searchParams.get('session') || 'web') + '.json');
       const j = JSON.parse(fs.readFileSync(f, 'utf8'));
       msgs = Array.isArray(j) ? j : (j.messages || []);
     } catch (e) { msgs = []; }
-    const items = msgs.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
-      .slice(-limit)
-      .map((m) => ({ role: m.role, content: String(m.content) }));
-    return json(res, 200, { ok: true, count: items.length, items });
+    const all = msgs.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim());
+    const end = Math.max(0, all.length - offset);
+    const start = Math.max(0, end - limit);
+    const items = all.slice(start, end).map((m) => ({ role: m.role, content: String(m.content) }));
+    return json(res, 200, { ok: true, count: items.length, total: all.length, offset, has_more: start > 0, items });
   }
 
   if (p === '/api/timeline') {
@@ -522,8 +601,13 @@ async function handleApi(req, res, url) {
       if (body.memory) next.memory = Object.assign({}, next.memory, body.memory);
       // 人格：一段自由文本；空字符串 = 回到内置默认人格
       if (typeof body.persona === 'string') {
+        if (body.persona.length > 8000) {
+          return json(res, 400, { ok: false, error: '人格太长了（最多 8000 字）。写短点就够：她是谁、怎么说话。' });
+        }
         if (body.persona.trim()) next.persona = body.persona;
         else delete next.persona;
+        // 人格热生效，不用重启：改完下一句就是新的人格
+        if (next.persona) her.cfg.persona = next.persona; else delete her.cfg.persona;
       }
       // 语音：朗读开关/声音/语速（软件版用，网页版不读）
       if (body.voice && typeof body.voice === 'object') {
@@ -679,7 +763,8 @@ function serveStatic(req, res, url) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+// 默认 16KB 的头装不下超长搜索词（中文编码后更占地方），抬高一点，超长了再在下面截断
+const server = http.createServer({ maxHeaderSize: 64 * 1024 }, async (req, res) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   try {
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
@@ -687,6 +772,21 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     return json(res, 500, { ok: false, error: e.message });
   }
+});
+
+// 端口被占时别甩一屏 Node 调用栈：告诉他下一步该干什么
+server.on('error', (e) => {
+  if (e && e.code === 'EADDRINUSE') {
+    console.error('');
+    console.error('  端口 ' + PORT + ' 已经被占用了。多半是鲸倩已经开着一份（看看任务栏），或者别的程序占了这个端口。');
+    console.error('  怎么办：先关掉旧的那份再双击；要换端口就改 config.json 里的 port，或者设环境变量 PORT。');
+    console.error('');
+    process.exit(1);
+  }
+  console.error('');
+  console.error('  服务起不来：' + (e && e.message ? e.message : e));
+  console.error('');
+  process.exit(1);
 });
 
 ensureDir(her.dataDir);

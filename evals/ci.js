@@ -230,6 +230,12 @@ async function main() {
     await stepAsync('23. 人称：第三人称存、第二人称用（库里不改原文）', () => node([path.join(__dirname, 'persona-test.js')]));
     await stepAsync('24. 记忆模型（层级 / 同义冲突去重 / 归属 / 分层召回）', () => node([path.join(__dirname, 'memory-model-test.js')]));
     await stepAsync('25. 内置 MCP 客户端（默认关 / stdio 启动 / 前缀 / 真调用 / 拒绝裸命令）', () => node([path.join(__dirname, 'mcp-client-test.js')]));
+    await stepAsync('26. 报错文案（全挂分类 / 选错家说清楚 / 端口被占说人话）', () => node([path.join(__dirname, 'error-message-test.js')]));
+    await stepAsync('27. 对话/工作模式（对话不挂工具 / 干活只挑能动手的 / 固定错家明说 / 热切换记得住）', () => node([path.join(__dirname, 'mode-test.js')]));
+    await stepAsync('28. 会话与记忆面板（搜索 / 删除防穿目录 / 翻页不重不漏）', () => node([path.join(__dirname, 'ux-test.js')]));
+    await stepAsync('29. 长短记忆/人格（10~8000 字入库与截短 / 人格上限 / 超大请求不失控）', () => node([path.join(__dirname, 'stress-test.js')]));
+    await stepAsync('30. 人称（接口/聊天两路入库 / 没主语也算他的 / 多人不互顶 / 提示换成「他」）', () => node([path.join(__dirname, 'person-test.js')]));
+    await stepAsync('31. 群聊多人（说话人按人挂名 / 各人的事不串 / 问谁找谁）', () => node([path.join(__dirname, 'group-test.js')]));
 
     console.log('\n全部通过，用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
   } catch (e) {

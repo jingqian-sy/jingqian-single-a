@@ -38,7 +38,8 @@ const DEFAULT_PERSONA = [
   '他打「我喜欢什么」是在说他自己；问「你知道我喜欢什么吗」是考你记不记得他的事，不是问你自己喜欢什么。',
   '他问关于他自己的事（名字、喜好、生日、习惯、住哪）时，先用记忆里关于他的那些回答；没记着就说没记着，'
     + '千万别拿你自己的名字、喜好或身份顶上去（不许把「我叫鲸倩」当成在回答「我叫什么」）。',
-  '「你」永远指他，不是指你自己；说自己的时候才用「我」，比如「我记着」「我看看」。',
+  '他问「你叫什么名字 / 你是谁 / 你住哪」时，那个「你」指的是你自己：直接答「我叫鲸倩」，别去翻他的记忆、别答「没记着」。',
+  '跟他说话时用「你」称呼他；但别把这条听岔：他嘴里的「你」问的是你，你嘴里的「你」才指他。',
   '记忆里写成「用户」「老爸」的，全部指他；跟他说话永远只准用「你」，不许对他说「用户」这两个字。',
   '别把他说的事说成你自己的（他说他爱喝冰美式，你就说「你爱喝」，不许说「我刚喝了一杯」）。',
   // ---------- 不许编 ----------
@@ -64,16 +65,20 @@ const DEFAULT_PERSONA = [
   '不确定他是开玩笑还是当真时，先按字面理解，再用一句问清楚，别自己脑补。'
 ].join('\n');
 
-// 他说的事按第三人称存，免得她当成自己的
-function toUserFact(text) {
+// 他说/别人说的事按第三人称存，免得她当成自己的
+function toPersonFact(text, name) {
   let t = String(text || '').trim();
   t = t.replace(/^记住[：:，,]?/, '').replace(/^记一下[：:，,]?/, '');
-  t = t.replace(/^我叫/, '用户叫').replace(/^我的名字是?/, '用户名字是');
-  t = t.replace(/^我(很|最|特别|也)?喜欢/, '用户喜欢').replace(/^我(很|最|特别|也)?讨厌/, '用户讨厌');
-  t = t.replace(/^我(很|最|特别|也)?爱/, '用户爱');
-  t = t.replace(/我的/g, '用户的');
-  t = t.replace(/我/g, '用户');
+  t = t.replace(/^我叫/, name + '叫').replace(/^我的名字是?/, name + '名字是');
+  t = t.replace(/^我(很|最|特别|也)?喜欢/, name + '喜欢').replace(/^我(很|最|特别|也)?讨厌/, name + '讨厌');
+  t = t.replace(/^我(很|最|特别|也)?爱/, name + '爱');
+  t = t.replace(/我的/g, name + '的');
+  t = t.replace(/我/g, name);
   return t;
+}
+
+function toUserFact(text) {
+  return toPersonFact(text, '用户');
 }
 
 const CAPTURE = /记住|别忘|记一下|我叫|我的名字|我喜欢|我讨厌|我不喜欢|生日是|我的生日|约定|以后都|从现在开始/;
@@ -84,11 +89,41 @@ function topicOf(text) {
   return ['生日', '名字', '喜欢', '讨厌', '住'].filter((w) => t.indexOf(w) >= 0);
 }
 
+// 「这是关于他的事吗」：主人名下、没写主语的事实也算；她自己的「我…」不算
+function isHisHit(h) {
+  const kind = kindOf(h && h.text);
+  if (kind === 'his') return true;
+  return kind !== 'self'
+    && ((h && h.person) || 'owner') === 'owner'
+    && !/^她/.test(String((h && h.text) || '').trim());
+}
+
+// 她是谁：人格可以被用户改掉，但「你问的是她自己」这条永远得在，不然小模型会说「没记着」
+const SELF_LINE = '【你是谁】你叫鲸倩。他问「你叫什么名字 / 你是谁 / 你住哪」时，问的是你本人：直接答「我叫鲸倩」，别翻他的记忆、别答「没记着」。';
+
+// 电脑本地时间：模型自己不知道今天几号，问起来十有八九靠猜
+function todayLine() {
+  const d = new Date();
+  const wk = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return '【现在】' + d.getFullYear() + ' 年 ' + (d.getMonth() + 1) + ' 月 ' + d.getDate() + ' 日 星期' + wk + ' ' + hh + ':' + mm
+    + '（这是电脑上的本地时间。被问到日期、星期、几点，就用这个，别猜、别编。）';
+}
+
 // 这活儿像不像要分几步做（决定要不要先出计划）
-function looksMultiStep(text) {
-  const t = String(text || '');
+function looksMultiStep(text) {  const t = String(text || '');
   if (t.length > 60) return true;
   return /分析|设计|架构|方案|规划|对比|排查|重构|部署|评测|实现|做一[个套]|写一[个段]|先.*再.*然后/.test(t);
+}
+
+// 这话像不像「要动手」（对话模式下认出是活，先问一句要不要切工作模式）
+// 只认明显要碰文件/命令/网络的那类；「帮我记一下」这种核心自己会存，不算。
+function looksLikeWork(text) {
+  const t = String(text || '');
+  return /(写|建|创建|新建|生成|改|删|跑|执行|运行|查(一下|下|查)?|列(一下|出)?|存到|保存到|下载|打开|截图|整理).{0,12}(文件|目录|文件夹|命令|脚本|表格|exe|out\.\w+|\.txt|\.md|\.json|桌面|C:|D:)/i.test(t)
+    || /(帮我|给我)(写|建|创建|生成|改|删|跑|执行|下载|整理)/.test(t)
+    || /(跑一下|执行一下|运行一下)/.test(t);
 }
 
 // 他在问关于他自己的事吗（这类问句小模型最容易答成它自己）
@@ -367,6 +402,14 @@ class Her {
     return h;
   }
 
+  // 三个入口各用各的模式：窗口闲聊、DSH/QQ 干活；没单独配就沿用老的总开关
+  modeFor(entry) {
+    const e = String(entry || 'desktop');
+    const m = (this.cfg.modes || {})[e];
+    if (m === 'chat' || m === 'work') return m;
+    return (this.cfg.mode === 'chat' || this.cfg.mode === 'work') ? this.cfg.mode : 'work';
+  }
+
   saveHistory(sessionId, h) {
     const max = (this.cfg.memory && this.cfg.memory.maxHistory) || 16;
     h.messages = h.messages.slice(-max * 2);
@@ -374,8 +417,10 @@ class Her {
     writeJson(this.sessionFile(sessionId), h);
   }
 
-  // 工具渐进披露：前两步先只给「看」的工具，别一上来塞满
-  toolsForStep(step, taskText) {
+  // 工具渐进披露：前两步先只给「看」的工具，别一上来塞满。
+  // allowTools === false = 这一轮不挂工具（对话模式 / 带图片的轮次）。
+  toolsForStep(step, taskText, allowTools) {
+    if (allowTools === false) return [];
     const all = this.tools.defs();
     if (step >= 1) return all;
     const isTask = /写|建|改|删|跑|执行|存|提醒|记住|画|生成/.test(String(taskText || ''));
@@ -383,7 +428,7 @@ class Her {
     return all.filter((d) => READONLY_TOOLS.includes(d.function.name));
   }
 
-  buildMessages(userText, recallRes, history) {
+  buildMessages(userText, recallRes, history, mode, speaker) {
     const parts = [];
     const sum = this.loadSummary(this._curSession);
     if (sum) parts.push('【之前聊到的】\n' + forPrompt(sum));
@@ -398,21 +443,35 @@ class Her {
     // 光写系统规则它记不住，就在问题前面直接点一句；记忆里没有就明说只能回答没记着。
     const askedAboutHim = askingAboutHimself(userText);
     let asked = '';
-    if (askedAboutHim) {
+    if (askedAboutHim && !speaker) {
       const tops = topicOf(userText);
-      const hisCount = ((recallRes && recallRes.hits) || []).filter((h) => kindOf(h.text) === 'his'
+      const hisCount = ((recallRes && recallRes.hits) || []).filter((h) => isHisHit(h)
         && (!tops.length || tops.some((w) => String(h.text).indexOf(w) >= 0))).length;
       asked = hisCount
         ? '（他这句话是在问他自己：用记忆里关于他的事回答，称呼他用「你」；不许用你自己的名字、喜好或身份来顶）\n'
         : '（他这句话是在问他自己，但记忆里没有这条。你只能老实说「这个我没记着」，不许猜日期、名字、喜好，也不许编）\n';
     }
-    const userContent = parts.length ? parts.join('\n\n') + '\n\n【这次的话】\n' + userText : userText;
-    return [{ role: 'system', content: this.cfg.persona || DEFAULT_PERSONA }]
+    const userContent = parts.length ? parts.join('\n\n') + '\n\n【这次的话】\n' + userText : userText;    // 对话模式这一轮一个工具都没有：必须说清楚，不然小模型会顺嘴说「我建好了」，其实啥也没干
+    const modeNote = mode === 'chat'
+      ? '（现在是对话模式：这一轮你没有任何工具，读写文件、跑命令、上网、看屏幕都做不了。他要你动手时，直接说这得切到工作模式，绝对不许说「已经做了」或者假装做过。）\n'
+      : '';
+    // 群里不是本人说的：得点一句说话人是谁，不然她会把群友的「我」当成老爸
+    const groupNote = speaker
+      ? '（这句是群里「' + speaker.name + '」说的，不是老爸本人。他嘴里的「我」指他自己；【关于他的事实】里的「他」是老爸，别当成他的；关于谁的事都要按名字对号。）\n'
+      : '';
+    // 只有他问到「你」本人时才加身份说明：常驻的话，小模型容易抓着这句不放（问车位也答「我叫鲸倩」）
+    const asksMe = /你(叫|的名字|是谁|多大了?|几岁|住哪|住哪里|是男是女|是机器人|是AI|是ai)/.test(String(userText || ''));
+    return [{ role: 'system', content: String(this.cfg.persona || DEFAULT_PERSONA) + '\n\n' + todayLine() + (asksMe ? '\n' + SELF_LINE : '') }]
       .concat(history.messages)
-      .concat([{ role: 'user', content: asked + userContent }]);
+      .concat([{ role: 'user', content: modeNote + groupNote + asked + userContent }]);
   }
 
-  capture(userText) {
+  // 换模式时把「这个会话上次是谁答的」清掉：切回对话模式就该回到免费的家，别一直挂在付费那家
+  resetSessionProviders() {
+    this.sessionProvider = {};
+  }
+
+  capture(userText, speaker) {
     if (!this.cfg.memory || this.cfg.memory.autoCapture === false) return null;
     if (!CAPTURE.test(String(userText))) return null;
     const raw = String(userText).trim();
@@ -436,16 +495,17 @@ class Her {
     if (!text) return null;
     const cls = classify(text);
     const imp = pinned ? 4 : scoreImportance(text, 'auto-capture');
-    // 认人：句子里出现了谁的名字/别名，就挂到那个人名下；没有就是 owner
-    const who = this.people.whoSaid(raw);
-    const personId = who ? who.id : 'owner';
-    const it = this.store.add({ text: toUserFact(text), kind: cls, importance: imp, pinned, source: 'auto-capture', person: personId });
+    // 认人：群里说话的人优先按他本人挂；私聊/本人就按句子里出现的别名，没有就是 owner
+    const who = speaker ? null : this.people.whoSaid(raw);
+    const personId = speaker ? ('p_qq_' + (speaker.id || speaker.name)) : (who ? who.id : 'owner');
+    const personName = speaker ? speaker.name : '用户';
+    const it = this.store.add({ text: toPersonFact(text, personName), kind: cls, importance: imp, pinned, source: speaker ? 'qq-group' : 'auto-capture', person: personId });
     // 他说「不对，我喜欢咖啡」这种更正：把同动词的旧偏好顶掉，别两条并存
     if (it && /^(不对|不是|说错|改口|改成|其实)/.test(raw)) {
-      const fact = toUserFact(text);
-      const verb = (fact.match(/^用户(喜欢|爱|讨厌|爱吃|爱喝)/) || [])[1];
+      const fact = toPersonFact(text, personName);
+      const verb = (fact.match(/^(用户|.+?)(喜欢|爱|讨厌|爱吃|爱喝)/) || [])[2];
       if (verb) {
-        const olds = this.store.active().filter((x) => x.id !== it.id && x.text.indexOf('用户' + verb) === 0 && x.text !== it.text);
+        const olds = this.store.active().filter((x) => x.id !== it.id && (x.person || 'owner') === personId && x.text.indexOf(personName + verb) === 0 && x.text !== it.text);
         for (const old of olds) {
           // 不管当初存成 fact 还是 preference，同一个动词的旧说法都被新说法顶掉
           this.store.archive(old.id);
@@ -501,6 +561,26 @@ class Her {
   async chat(userText, opts) {
     opts = opts || {};
     const sessionId = opts.sessionId || 'default';
+    // 两个模式：
+    //   chat = 只聊天（不挂工具，谁都能用，免费模型也轮得上）
+    //   work = 干活（挂全套工具，只让能动手的模型接）
+    const mode = (opts.mode === 'chat' || opts.mode === 'work') ? opts.mode : this.modeFor(opts.entry);
+    const workMode = mode === 'work';
+    // 群里说话的人：非主人时，他嘴里的「我」指他自己，记忆要挂到他名下
+    const sp = (opts.speaker && typeof opts.speaker === 'object' && String(opts.speaker.name || '').trim())
+      ? { id: String(opts.speaker.id || ''), name: String(opts.speaker.name).trim().slice(0, 40), owner: !!opts.speaker.owner }
+      : null;
+    let speaker = null;
+    if (sp && !sp.owner) {
+      const known = this.people.whoSaid(sp.id) || this.people.whoSaid(sp.name);
+      if (known && known.id === 'owner') speaker = null;
+      else {
+        speaker = sp;
+        if (sp.id && !this.people.get('p_qq_' + sp.id)) {
+          try { this.people.upsert({ id: 'p_qq_' + sp.id, name: sp.name, kind: 'friend', relation: '群友' }); } catch (e) {}
+        }
+      }
+    }
     const started = Date.now();
     const budget = this.cfg.budget || {};
     const maxSeconds = (budget.perTaskSeconds || 180) * 1000;
@@ -531,13 +611,13 @@ class Her {
     const recallRes = await this.recallBlock(text);
     // 他问自己的事，就只喂「关于他的事实」；不然她的自述（「我叫鲸倩」）会被当成他的信息
     if (recallRes && askingAboutHimself(text)) {
-      const his = (recallRes.hits || []).filter((h) => kindOf(h.text) === 'his');
+      const his = (recallRes.hits || []).filter((h) => isHisHit(h));
       recallRes.block = his.length
         ? '【关于他的事实】\n' + his.map((h) => '- ' + (h.pinned ? '★' : '') + forPrompt(h.text)).join('\n')
         : '';
     }
-    const captured = this.capture(text);
-    const messages = this.buildMessages(text, recallRes, history);
+    const messages = this.buildMessages(text, recallRes, history, mode, speaker);
+    const captured = this.capture(text, speaker);
     // 附件：文本内容接在这一次的用户消息后面；图片换成 OpenAI 的多模态 content 数组。
     // 注意只影响这一趟发给模型的 messages，历史里仍只存用户打的那句话，免得越聊越臃肿。
     if (attachBlock || images.length) {
@@ -551,11 +631,14 @@ class Her {
 
     let usedTools = [];
     let retriedCloud = false;
+    // 带图片的这轮不挂工具：视觉模型多半不带工具，先让她把图看明白；
+    // 对话模式则整轮都不挂工具。
+    const useTools = workMode && !images.length;
     this._selfFix = false;
     this._selfFix2 = false;
     let planText = '';
-    // 看着像多步活：先让她说个三五步的计划，后面照着走，别边想边做跑偏
-    if (looksMultiStep(text) && !images.length) {
+    // 看着像多步活：先让她说个三五步的计划，后面照着走，别边想边做跑偏（只在干活模式）
+    if (useTools && looksMultiStep(text)) {
       try {
         const pr = await this.router.call(
           messages.concat([{ role: 'user', content: '先用三到五句说清楚你准备怎么做：一句一步，不要调用工具，不要客套。' }]),
@@ -597,7 +680,7 @@ class Her {
       };
       let res;
       try {
-        res = await this.router.call(messages, this.toolsForStep(step, text), callOpts);
+        res = await this.router.call(messages, this.toolsForStep(step, text, useTools), callOpts);
       } catch (e) {
         if (e.code === 'NO_VISION') {
           const names = images.map((x) => x.name).join('、');
@@ -619,7 +702,7 @@ class Her {
         cost += res.stat.cost;
         try {
           const cloudOpts = Object.assign({}, callOpts, { skipLocal: true, prefer: '' });
-          res = await this.router.call(messages, this.toolsForStep(step, text), cloudOpts);
+          res = await this.router.call(messages, this.toolsForStep(step, text, useTools), cloudOpts);
         } catch (e) {
           this.sessionProvider[sessionId] = '';
         }
@@ -662,7 +745,7 @@ class Her {
 
       // 说了要做却一次工具都没调：提醒它一次（只提醒一次，别死循环）
       const looksLikeTask = /写|建|创建|生成|改|删|跑|执行|查|列|存|记|提醒/.test(text);
-      if (!usedTools.length && looksLikeTask && step === 0) {
+      if (useTools && !usedTools.length && looksLikeTask && step === 0) {
         messages.push({ role: 'user', content: '（你刚才没调用任何工具就直接回答了。请现在真的调用工具去做，别只说做完了。）' });
         continue;
       }
@@ -694,7 +777,7 @@ class Her {
     // 小模型经常不听提示，只能在这一层挡一下。
     let reply = lastText || '（这轮没出结论，要不再说一次？）';
     const tops2 = topicOf(text);
-    const hisHits = (recallRes.hits || []).filter((x) => kindOf(x.text) === 'his'
+    const hisHits = (recallRes.hits || []).filter((x) => isHisHit(x)
       && (!tops2.length || tops2.some((w) => String(x.text).indexOf(w) >= 0)));
     if (askingAboutHimself(text) && hisHits.length === 0 && reply.length > 0) {
       // 他这句话问的那个话题，之前的对话里他自己说过没有
@@ -719,6 +802,12 @@ class Her {
         }
       }
     }
+    // 对话模式里认出是「要动手的活」：不自己切，先问一句，让他点头再换模式
+    let suggestMode = '';
+    if (!workMode && looksLikeWork(text)) {
+      suggestMode = 'work';
+      reply += '\n（这活儿得动手，我现在还没开始。要我切到工作模式吗？切过来我就用能动手的模型去做。）';
+    }
     const h = this.loadHistory(sessionId);
     h.messages.push({ role: 'user', content: displayText }, { role: 'assistant', content: reply });
     this.saveHistory(sessionId, h);
@@ -729,6 +818,8 @@ class Her {
 
     const stats = {
       provider,
+      mode,
+      suggest_mode: suggestMode,
       steps,
       prompt_tokens: totalPrompt,
       completion_tokens: totalCompletion,
@@ -795,4 +886,4 @@ class Her {
   }
 }
 
-module.exports = { Her, DEFAULT_PERSONA };
+module.exports = { Her, DEFAULT_PERSONA, toUserFact };
