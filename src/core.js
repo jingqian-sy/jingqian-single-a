@@ -369,29 +369,30 @@ class Her {
     return n;
   }
 
-  // 历史超过阈值就把旧的部分压成一段摘要（走当前路由，优先本地，便宜）
+  // 历史过阈值就把「还没总结过的旧部分」压成摘要；原文不删，只把模型窗口缩短
   async rollSummary(history, sessionId) {
     const max = (this.cfg.memory && this.cfg.memory.maxHistory) || 16;
-    const trigger = (this.cfg.memory && this.cfg.memory.summaryTrigger) || (max + 10);
     const keep = (this.cfg.memory && this.cfg.memory.summaryKeep) || max;
     const msgs = history.messages || [];
-    if (msgs.length < trigger) return history;
-    const cut = msgs.length - keep;
-    const old = msgs.slice(0, cut);
+    const cursor = Math.max(0, Math.min(Number(history.summary_cursor) || 0, msgs.length));
+    const end = Math.max(cursor, msgs.length - keep);
+    // 新增的旧消息太少就不折腾模型，攒够一截再压
+    if (end - cursor < 12) return history;
+    const old = msgs.slice(cursor, end);
     const prev = this.loadSummary(sessionId);
     const text = old.map(function (m) { return (m.role === 'user' ? '他：' : '她：') + String(m.content || '').slice(0, 300); }).join('\n');
     let sum = '';
     try {
       const res = await this.router.call([
-        { role: 'system', content: '把下面这段对话压成一段不超过 200 字的中文摘要，只留事实、约定和她答应过的事。不要评价、不要客套。' },
+        { role: 'system', content: '把下面这段对话压成一段不超过 200 字的中文摘要，只留事实、约定、数字和她答应过的事。不要评价、不要客套。' },
         { role: 'user', content: (prev ? prev + '\n' : '') + text.slice(-4000) }
       ], [], { taskText: '摘要', temperature: 0.1, timeoutMs: 60000 });
       sum = String((res.json.choices && res.json.choices[0] && res.json.choices[0].message && res.json.choices[0].message.content) || '').trim();
     } catch (e) { sum = ''; }
     if (sum) this.saveSummary(sessionId, sum);
-    // 删之前先沉进记忆库，别白丢
+    // 压进摘要之前，先沉进记忆库，别白丢
     try { await this.distillOld(old, sessionId); } catch (e) {}
-    history.messages = msgs.slice(cut);
+    history.summary_cursor = end;
     this.saveHistory(sessionId, history);
     return history;
   }
@@ -410,9 +411,9 @@ class Her {
     return (this.cfg.mode === 'chat' || this.cfg.mode === 'work') ? this.cfg.mode : 'work';
   }
 
+  // 原文不再丢：只限制给模型的窗口，完整会话留在磁盘上（可以用 search_history / 翻会话找回来）
   saveHistory(sessionId, h) {
-    const max = (this.cfg.memory && this.cfg.memory.maxHistory) || 16;
-    h.messages = h.messages.slice(-max * 2);
+    if (h.messages.length > 4000) h.messages = h.messages.slice(-4000);
     h.updated_at = nowIso();
     writeJson(this.sessionFile(sessionId), h);
   }
@@ -430,6 +431,18 @@ class Her {
 
   buildMessages(userText, recallRes, history, mode, speaker) {
     const parts = [];
+    // 上下文按「字数档位」裁，不再按条数：默认 8000 字，至少留最近 4 条
+    const budget = Math.max(2000, Number(this.cfg.memory && this.cfg.memory.historyChars) || 8000);
+    let start = history.messages.length;
+    let used = 0;
+    for (let i = history.messages.length - 1; i >= 0; i--) {
+      const m = history.messages[i];
+      const n = typeof m.content === 'string' ? m.content.length : 1;
+      if (used + n > budget && history.messages.length - i >= 4) break;
+      used += n;
+      start = i;
+    }
+    const recent = history.messages.slice(start);
     const sum = this.loadSummary(this._curSession);
     if (sum) parts.push('【之前聊到的】\n' + forPrompt(sum));
     if (recallRes.block) {
@@ -462,7 +475,7 @@ class Her {
     // 只有他问到「你」本人时才加身份说明：常驻的话，小模型容易抓着这句不放（问车位也答「我叫鲸倩」）
     const asksMe = /你(叫|的名字|是谁|多大了?|几岁|住哪|住哪里|是男是女|是机器人|是AI|是ai)/.test(String(userText || ''));
     return [{ role: 'system', content: String(this.cfg.persona || DEFAULT_PERSONA) + '\n\n' + todayLine() + (asksMe ? '\n' + SELF_LINE : '') }]
-      .concat(history.messages)
+      .concat(recent)
       .concat([{ role: 'user', content: modeNote + groupNote + asked + userContent }]);
   }
 
@@ -543,7 +556,7 @@ class Her {
             try { args = JSON.parse(call.function.arguments || '{}'); } catch (e) { args = {}; }
             // 子智能体不能替用户点头：红线动作只会拿到「需要确认」的提示
             const out = await this.tools.run(call.function.name, args, { confirmed: false });
-            messages.push({ role: 'tool', tool_call_id: call.id, content: String(out) });
+            messages.push({ role: 'tool', tool_call_id: call.id, content: truncate(String(out), 2000) });
           }
           continue;
         }
@@ -738,7 +751,8 @@ class Her {
           usedTools.push(call.function.name);
           trace.push({ tool: call.function.name, args: truncate(JSON.stringify(args), 200), result: truncate(String(out), 300) });
           if (this.tools.pending) this.pending = this.tools.pending;
-          messages.push({ role: 'tool', tool_call_id: call.id, content: String(out) });
+          // 工具输出太长就别整段进上下文：给模型看前 4000 字，够判断了
+          messages.push({ role: 'tool', tool_call_id: call.id, content: truncate(String(out), 4000) });
         }
         continue;
       }

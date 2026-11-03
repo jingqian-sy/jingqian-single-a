@@ -236,6 +236,7 @@ async function main() {
     await stepAsync('29. 长短记忆/人格（10~8000 字入库与截短 / 人格上限 / 超大请求不失控）', () => node([path.join(__dirname, 'stress-test.js')]));
     await stepAsync('30. 人称（接口/聊天两路入库 / 没主语也算他的 / 多人不互顶 / 提示换成「他」）', () => node([path.join(__dirname, 'person-test.js')]));
     await stepAsync('31. 群聊多人（说话人按人挂名 / 各人的事不串 / 问谁找谁）', () => node([path.join(__dirname, 'group-test.js')]));
+    await stepAsync('32. 上下文窗口（按字数档位裁 / 原文不丢 / 摘要游标前进）', () => node([path.join(__dirname, 'context-test.js')]));
 
     console.log('\n全部通过，用时 ' + Math.round((Date.now() - t0) / 1000) + ' 秒');
   } catch (e) {

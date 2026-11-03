@@ -2771,6 +2771,8 @@ namespace JingqianShell
         Label lblStatus, lblTestResult;
         ComboBox cmbRouteMode;
         TextBox txtRouteOrder, txtMaxSteps, txtTopK, txtMaxHistory;
+        ComboBox cmbContextTier;
+        Label lblPersonaCount;
         CheckBox chkEscalate, chkAllowCommand;
         bool qqConnected;
         string qqGateway, qqToken;
@@ -3177,12 +3179,24 @@ namespace JingqianShell
             txtTopK = Box(14, 1138, 80);
             Cap("历史轮数", 120, 1118);
             txtMaxHistory = Box(120, 1138, 80);
+            Cap("上下文档位", 216, 1118);
+            cmbContextTier = new ComboBox();
+            cmbContextTier.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbContextTier.Font = Theme.Ui(9f, false);
+            cmbContextTier.SetBounds(Dpi.X(216), Dpi.X(1138), Dpi.X(124), Dpi.X(26));
+            cmbContextTier.Items.Add("省（4000 字）");
+            cmbContextTier.Items.Add("标准（8000 字）");
+            cmbContextTier.Items.Add("大（16000 字）");
+            cmbContextTier.Items.Add("超大（32000 字）");
+            cmbContextTier.SelectedIndex = 1;
+            cmbContextTier.AccessibleName = "cfgContextTier";
+            contentPanel.Controls.Add(cmbContextTier);
 
             chkAllowCommand = new CheckBox();
             chkAllowCommand.Text = "允许跑命令（只跑白名单里的）";
             chkAllowCommand.Font = Theme.Ui(9f, false);
             chkAllowCommand.ForeColor = Theme.Text;
-            chkAllowCommand.SetBounds(Dpi.X(216), Dpi.X(1142), Dpi.X(280), Dpi.X(24));
+            chkAllowCommand.SetBounds(Dpi.X(352), Dpi.X(1142), Dpi.X(258), Dpi.X(24));
             contentPanel.Controls.Add(chkAllowCommand);
 
             Hint("改完点最下面「保存」；端口、模型、沙盒这些要重启服务才生效。", 14, 1178);
@@ -3200,6 +3214,13 @@ namespace JingqianShell
             txtPersona.SetBounds(Dpi.X(14), Dpi.X(1278), Dpi.X(596), Dpi.X(120));
             txtPersona.AccessibleName = "cfgPersona";
             contentPanel.Controls.Add(txtPersona);
+            lblPersonaCount = new Label();
+            lblPersonaCount.AutoSize = false;
+            lblPersonaCount.Font = Theme.Ui(8.5f, false);
+            lblPersonaCount.ForeColor = Theme.Dim;
+            lblPersonaCount.SetBounds(Dpi.X(114), Dpi.X(1406), Dpi.X(496), Dpi.X(20));
+            contentPanel.Controls.Add(lblPersonaCount);
+            txtPersona.TextChanged += delegate { UpdatePersonaCount(); };
 
             btnResetPersona = SmallBtn("恢复默认", 14, 1408, 92, false);
             btnResetPersona.Click += delegate
@@ -3213,7 +3234,7 @@ namespace JingqianShell
             ph.Font = Theme.Ui(8.5f, false);
             ph.ForeColor = Theme.Dim;
             ph.Text = "内置默认：叫鲸倩、短句口语、不列清单、不说自己是什么模型、不知道就说不确定。";
-            ph.SetBounds(Dpi.X(114), Dpi.X(1412), Dpi.X(500), Dpi.X(24));
+            ph.SetBounds(Dpi.X(14), Dpi.X(1436), Dpi.X(596), Dpi.X(24));
             contentPanel.Controls.Add(ph);
 
             // ---------- 语音 ----------
@@ -3646,7 +3667,7 @@ namespace JingqianShell
                 chkEscalate.Checked = escalate;
                 txtMaxSteps.Text = Convert.ToString(maxSteps);
 
-                int topK = 5, maxHistory = 16;
+                int topK = 5, maxHistory = 16, histChars = 8000;
                 bool autoCap = true;
                 if (cfg.TryGetValue("memory", out sub) && sub is Dictionary<string, object>)
                 {
@@ -3654,10 +3675,15 @@ namespace JingqianShell
                     if (md.ContainsKey("autoCapture")) autoCap = Convert.ToBoolean(md["autoCapture"]);
                     if (md.ContainsKey("topK")) topK = Convert.ToInt32(md["topK"]);
                     if (md.ContainsKey("maxHistory")) maxHistory = Convert.ToInt32(md["maxHistory"]);
+                    if (md.ContainsKey("historyChars")) histChars = Convert.ToInt32(md["historyChars"]);
                 }
                 chkMemory.Checked = autoCap;
                 txtTopK.Text = Convert.ToString(topK);
                 txtMaxHistory.Text = Convert.ToString(maxHistory);
+                if (cmbContextTier != null)
+                {
+                    cmbContextTier.SelectedIndex = histChars <= 4000 ? 0 : (histChars <= 8000 ? 1 : (histChars <= 16000 ? 2 : 3));
+                }
 
                 qqConnected = false;
                 qqGateway = "";
@@ -3692,6 +3718,7 @@ namespace JingqianShell
                 if (chkQQEnable != null) chkQQEnable.Checked = qqConnected;
                 UpdateQQState();
                 txtPersona.Text = cfg.ContainsKey("persona") ? Convert.ToString(cfg["persona"]) : "";
+                UpdatePersonaCount();
                 // 语音：列出本机声音，选中配置里那家（没配就选中文声音）
                 bool vOn = false;
                 string vName = "";
@@ -4019,6 +4046,16 @@ namespace JingqianShell
             } catch { }
         }
 
+        void UpdatePersonaCount()
+        {
+            if (lblPersonaCount == null || txtPersona == null) return;
+            int n = txtPersona.Text.Length;
+            if (n == 0) { lblPersonaCount.Text = "现在用内置默认人格"; lblPersonaCount.ForeColor = Theme.Dim; return; }
+            if (n <= 2000) { lblPersonaCount.Text = n + " 字 · 每轮都会带上"; lblPersonaCount.ForeColor = Theme.Dim; return; }
+            lblPersonaCount.Text = n + " 字 · 有点长：每轮都带，会更贵更慢，也更容易抢戏/自相矛盾；建议压到 2000 字以内";
+            lblPersonaCount.ForeColor = Theme.Warn;
+        }
+
         void QQFind()
         {
             btnQQFind.Enabled = false;
@@ -4151,6 +4188,12 @@ namespace JingqianShell
                 int tk, mh;
                 if (int.TryParse(txtTopK.Text.Trim(), out tk) && tk > 0) mb["topK"] = tk;
                 if (int.TryParse(txtMaxHistory.Text.Trim(), out mh) && mh >= 0) mb["maxHistory"] = mh;
+                if (cmbContextTier != null)
+                {
+                    int[] tiers = { 4000, 8000, 16000, 32000 };
+                    int ti = Math.Max(0, Math.Min(3, cmbContextTier.SelectedIndex));
+                    mb["historyChars"] = tiers[ti];
+                }
                 body["memory"] = mb;
 
                 // 中控台：选路（顺序留空就用现在列表的顺序）
