@@ -401,8 +401,23 @@ namespace JingqianShell
             }
         }
 
-        public static string FindNode()
+        public string FindNode()
         {
+            // 绿色版：优先用程序目录里自带的 runtime\node.exe，换盘符也能跑
+            try
+            {
+                string env = Environment.GetEnvironmentVariable("JINGQIAN_NODE");
+                if (!string.IsNullOrEmpty(env) && File.Exists(env)) return env;
+                string direct = Path.Combine(RepoRoot, "runtime", "node.exe");
+                if (File.Exists(direct)) return direct;
+                string rt = Path.Combine(RepoRoot, "runtime");
+                if (Directory.Exists(rt))
+                {
+                    string[] hits = Directory.GetFiles(rt, "node.exe", SearchOption.AllDirectories);
+                    if (hits.Length > 0) return hits[0];
+                }
+            }
+            catch { }
             string pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
             foreach (string dir in pathVar.Split(';'))
             {

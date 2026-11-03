@@ -1,0 +1,44 @@
+﻿# 打包绿色便携版：一个文件夹带走（程序 + node 运行时 + 空数据目录）
+# 用法：powershell -ExecutionPolicy Bypass -File tools\build-portable.ps1
+# 产物：dist\jingqian-portable-<版本>\ 和同名 .zip
+param([string]$OutRoot = "")
+
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path -Parent $PSScriptRoot
+$pkg = Get-Content (Join-Path $repo 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$ver = $pkg.version
+if (-not $OutRoot) { $OutRoot = Join-Path $repo 'dist' }
+$name = "jingqian-portable-$ver"
+$out = Join-Path $OutRoot $name
+$zip = Join-Path $OutRoot ($name + '.zip')
+
+if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+New-Item -ItemType Directory -Path $out -Force | Out-Null
+foreach ($d in @('src', 'public', 'desktop', 'docs', 'plugins-example')) {
+  $from = Join-Path $repo $d
+  if (Test-Path $from) { robocopy $from (Join-Path $out $d) /E /NFL /NDL /NJH /NJS /NP /XD data .run .tmp | Out-Null }
+}
+foreach ($f in @('package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'config.example.json', '启动鲸倩.cmd', '创建桌面快捷方式.cmd')) {
+  $p = Join-Path $repo $f
+  if (Test-Path $p) { Copy-Item $p (Join-Path $out $f) -Force }
+}
+# node 运行时：优先用本机装好的那份
+$nodeRuntime = Join-Path $env:LOCALAPPDATA 'Jingqian\runtime'
+if (-not (Test-Path $nodeRuntime)) {
+  $cmd = Get-Command node -ErrorAction SilentlyContinue
+  if ($cmd) {
+    $nodeRuntime = Split-Path -Parent $cmd.Source
+    New-Item -ItemType Directory -Path (Join-Path $out 'runtime') -Force | Out-Null
+    Copy-Item (Join-Path $nodeRuntime 'node.exe') (Join-Path $out 'runtime\node.exe') -Force
+  } else {
+    throw '没找到 node 运行时：先装一个 Node 22，或把便携版运行时放到 %LOCALAPPDATA%\Jingqian\runtime'
+  }
+} else {
+  robocopy $nodeRuntime (Join-Path $out 'runtime') /E /NFL /NDL /NJH /NJS /NP | Out-Null
+}
+New-Item -ItemType Directory -Path (Join-Path $out 'data') -Force | Out-Null
+
+if (Test-Path $zip) { Remove-Item $zip -Force }
+Compress-Archive -Path (Join-Path $out '*') -DestinationPath $zip -CompressionLevel Optimal
+$mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+Write-Host ("便携版打包好了：{0}（{1} MB）" -f $zip, $mb)

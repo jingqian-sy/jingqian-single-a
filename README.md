@@ -6,6 +6,20 @@
 
 > 一个住在你自己电脑里的中文智能体：会记事、会算账、会动手，但手上有一条红线。
 
+## 解压即用：绿色便携版（推荐）
+
+下载 `jingqian-portable-<版本>.zip`，解压到任意文件夹（U 盘也行），双击 **`启动鲸倩.cmd`** 就能用。
+不用安装、不用管理员、不往 `%LOCALAPPDATA%` 写东西；记忆、会话、config 都在这个文件夹的 `data\` 和 `config.json` 里，
+整个文件夹搬走 / 拷到别的电脑，换台机器接着用。
+
+- 自带 node 运行时，目标电脑不用装 Node；Windows 10/11 自带 .NET Framework
+- 第一次打开会提示接模型：填一家云端 key，或本机装 Ollama 直接免 key 用
+- 想放桌面：双击 `创建桌面快捷方式.cmd`
+- 更新：新版本解压覆盖程序文件即可，**别覆盖 `data\` 和 `config.json`**
+- 只能 Windows；`config.json` 里有你的 key 明文，别放进公用 U 盘/电脑
+
+想自己打包：`powershell -ExecutionPolicy Bypass -File tools\build-portable.ps1`，产物在 `dist\`。
+
 ## 1.x：软件窗口就是全部（一个核、两个前端是 2.0 方向）
 
 > 现在版本只有一条主路：双击窗口、填模型、开聊。所有能力都在这一个界面里。
