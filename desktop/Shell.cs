@@ -157,6 +157,7 @@ namespace JingqianShell
     class ApiClient
     {
         public string BaseUrl;
+        public string Session = "web";   // 当前会话 id（界面可以切）
         readonly JavaScriptSerializer json = new JavaScriptSerializer();
 
         public ApiClient(string baseUrl)
@@ -241,7 +242,7 @@ namespace JingqianShell
         {
             Dictionary<string, object> body = new Dictionary<string, object>();
             body["message"] = message;
-            body["session"] = "web";
+            body["session"] = Session;
             if (attachments != null && attachments.Count > 0) body["attachments"] = attachments;
             Dictionary<string, object> r = Post("/api/chat", body, 180000);
             stats = "";
@@ -1154,6 +1155,7 @@ namespace JingqianShell
                 caption.Invalidate();
             });
             Button bState = ToolBtn(toolPanel, ref tx, "状态", false, delegate { ShowStatus(); });
+            Button bSess = ToolBtn(toolPanel, ref tx, "会话", false, delegate { OpenSessions(); });
             Button bMem = ToolBtn(toolPanel, ref tx, "记忆", false, delegate { OpenMemory(); });
             Button bPlug = ToolBtn(toolPanel, ref tx, "插件", false, delegate { OpenPlugins(); });
             Button bHelp = ToolBtn(toolPanel, ref tx, "上手", false, delegate { OpenTutorial(true); });
@@ -1161,6 +1163,7 @@ namespace JingqianShell
             btnVoice = ToolBtn(toolPanel, ref tx, "朗读", false, delegate { ToggleVoice(); });
             tip.SetToolTip(bNew, "清空显示（历史还在）");
             tip.SetToolTip(bState, "服务状态、哪家模型、今天用了多少");
+            tip.SetToolTip(bSess, "翻以前的会话、按关键词搜");
             tip.SetToolTip(bMem, "她记得的事：能搜能删");
             tip.SetToolTip(bPlug, "小功能：装、启用、卸载");
             tip.SetToolTip(bHelp, "四步上手教程");
@@ -2196,7 +2199,7 @@ namespace JingqianShell
         {
             if (chatView != null && chatView.Count > 0) return chatView.Count;  // 已经铺过就别重复铺
             int n = 0;
-            List<Dictionary<string, object>> items = api.History("web");
+            List<Dictionary<string, object>> items = api.History(api.Session);
             if (items.Count == 0) items = api.History("desktop");
             foreach (Dictionary<string, object> it in items)
             {
@@ -2431,6 +2434,37 @@ namespace JingqianShell
             catch (Exception ex)
             {
                 MessageBox.Show(this, "打开教程失败：" + ex.Message, "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        // 会话：翻历史会话、按关键词搜、切过去继续聊
+        public void OpenSessions()
+        {
+            try
+            {
+                using (SessionsForm f = new SessionsForm(api, api.Session))
+                {
+                    if (f.ShowDialog(this) != DialogResult.OK) return;
+                    string pick = f.PickedSession;
+                    if (pick == "__new__")
+                    {
+                        api.Session = "s" + DateTime.Now.ToString("MMddHHmmss");
+                        chatView.Clear();
+                        caption.StatusText = "开了个新会话，接着说吧";
+                    }
+                    else if (pick.Length > 0)
+                    {
+                        api.Session = pick;
+                        chatView.Clear();
+                        LoadHistoryNow();
+                        caption.StatusText = "切到会话 " + pick;
+                    }
+                    caption.Invalidate();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "打开会话列表失败：" + ex.Message, "会话", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
@@ -4479,6 +4513,22 @@ namespace JingqianShell
                 }
             }
             catch (Exception ex) { Console.WriteLine("GUIDE SHOT FAIL " + ex.Message); }
+            try
+            {
+                using (SessionsForm sf = new SessionsForm(api, "web"))
+                {
+                    sf.StartPosition = FormStartPosition.Manual;
+                    sf.Location = new Point(-30000, -30000);
+                    sf.ShowInTaskbar = false;
+                    sf.Show();
+                    Application.DoEvents();
+                    Thread.Sleep(500);
+                    Application.DoEvents();
+                    Shot(sf, Path.Combine(repo, "data", "_ui_sessions.png"));
+                    sf.Hide();
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("SESSIONS SHOT FAIL " + ex.Message); }
             return 0;
         }
 
@@ -4638,6 +4688,155 @@ namespace JingqianShell
             tip.Font = Theme.Ui(8f, false);
             tip.SetBounds(Dpi.X(22), Dpi.X(472), Dpi.X(300), Dpi.X(22));
             Controls.Add(tip);
+        }
+    }
+
+    // ===================== 会话列表：翻旧对话、搜关键词 =====================
+    class SessionsForm : Form
+    {
+        public string PickedSession = "";
+        readonly ApiClient api;
+        readonly string current;
+        ListView list;
+        TextBox search;
+        Label hint;
+        List<string> ids = new List<string>();
+
+        public SessionsForm(ApiClient api, string current)
+        {
+            this.api = api;
+            this.current = current;
+            Text = "会话 · 鲸倩";
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MinimizeBox = false;
+            MaximizeBox = false;
+            ShowInTaskbar = false;
+            Font = Theme.Ui(9f, false);
+            BackColor = Theme.Paper;
+            ClientSize = new Size(Dpi.X(760), Dpi.X(500));
+
+            Label head = new Label();
+            head.Text = "以前的对话";
+            head.Font = Theme.Ui(12f, true);
+            head.ForeColor = Theme.Text;
+            head.SetBounds(Dpi.X(20), Dpi.X(14), Dpi.X(300), Dpi.X(26));
+            Controls.Add(head);
+
+            search = new TextBox();
+            search.Font = Theme.Ui(9.5f, false);
+            search.BorderStyle = BorderStyle.FixedSingle;
+            search.BackColor = Color.White;
+            search.SetBounds(Dpi.X(20), Dpi.X(48), Dpi.X(520), Dpi.X(26));
+            search.KeyDown += delegate (object s, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; LoadList(); } };
+            Controls.Add(search);
+
+            FlatBtn find = new FlatBtn("搜一下", Color.White, Theme.AccentDeep);
+            find.NormalBorder = Theme.Border;
+            find.Font = Theme.Ui(9f, false);
+            find.SetBounds(Dpi.X(548), Dpi.X(48), Dpi.X(90), Dpi.X(28));
+            find.Click += delegate { LoadList(); };
+            Controls.Add(find);
+
+            Label tip = new Label();
+            tip.Text = "搜的是对话内容；双击一条直接打开。";
+            tip.ForeColor = Theme.Dim;
+            tip.Font = Theme.Ui(8.5f, false);
+            tip.SetBounds(Dpi.X(20), Dpi.X(78), Dpi.X(620), Dpi.X(20));
+            Controls.Add(tip);
+
+            list = new ListView();
+            list.View = View.Details;
+            list.FullRowSelect = true;
+            list.HideSelection = false;
+            list.BorderStyle = BorderStyle.FixedSingle;
+            list.Font = Theme.Ui(9f, false);
+            list.BackColor = Color.White;
+            list.SetBounds(Dpi.X(20), Dpi.X(102), Dpi.X(720), Dpi.X(320));
+            list.Columns.Add("时间", Dpi.X(120));
+            list.Columns.Add("条数", Dpi.X(52));
+            list.Columns.Add("开头", Dpi.X(220));
+            list.Columns.Add("最后一句", Dpi.X(320));
+            list.DoubleClick += delegate { Accept(); };
+            Controls.Add(list);
+
+            hint = new Label();
+            hint.Text = "正在读…";
+            hint.ForeColor = Theme.Dim;
+            hint.Font = Theme.Ui(8.5f, false);
+            hint.SetBounds(Dpi.X(20), Dpi.X(428), Dpi.X(500), Dpi.X(20));
+            Controls.Add(hint);
+
+            FlatBtn open = new FlatBtn("打开", Theme.Accent, Color.White);
+            open.Font = Theme.Ui(9f, true);
+            open.SetBounds(Dpi.X(760 - 20 - 90), Dpi.X(452), Dpi.X(90), Dpi.X(30));
+            open.Click += delegate { Accept(); };
+            Controls.Add(open);
+
+            FlatBtn fresh = new FlatBtn("新对话", Color.White, Theme.AccentDeep);
+            fresh.NormalBorder = Theme.Border;
+            fresh.Font = Theme.Ui(9f, false);
+            fresh.SetBounds(Dpi.X(760 - 20 - 90 - 8 - 90), Dpi.X(452), Dpi.X(90), Dpi.X(30));
+            fresh.Click += delegate { PickedSession = "__new__"; DialogResult = DialogResult.OK; Close(); };
+            Controls.Add(fresh);
+
+            FlatBtn close = new FlatBtn("关闭", Color.White, Theme.AccentDeep);
+            close.NormalBorder = Theme.Border;
+            close.Font = Theme.Ui(9f, false);
+            close.SetBounds(Dpi.X(760 - 20 - 90 - 8 - 90 - 8 - 80), Dpi.X(452), Dpi.X(80), Dpi.X(30));
+            close.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
+            Controls.Add(close);
+
+            LoadList();
+        }
+
+        void LoadList()
+        {
+            list.Items.Clear();
+            ids.Clear();
+            string q = search.Text.Trim();
+            string path = "/api/sessions?limit=200" + (q.Length > 0 ? "&query=" + Uri.EscapeDataString(q) : "");
+            try
+            {
+                Dictionary<string, object> r = api.Get(path, 8000);
+                object arr;
+                if (r.TryGetValue("items", out arr) && arr is object[])
+                {
+                    foreach (object o in (object[])arr)
+                    {
+                        Dictionary<string, object> d = o as Dictionary<string, object>;
+                        if (d == null) continue;
+                        string id = d.ContainsKey("id") ? Convert.ToString(d["id"]) : "";
+                        string title = d.ContainsKey("title") ? Convert.ToString(d["title"]) : "";
+                        string preview = d.ContainsKey("preview") ? Convert.ToString(d["preview"]) : "";
+                        string when = d.ContainsKey("updated_at") ? Convert.ToString(d["updated_at"]) : "";
+                        if (when.Length >= 16) when = when.Substring(0, 16).Replace('T', ' ');
+                        string cnt = d.ContainsKey("count") ? Convert.ToString(d["count"]) : "0";
+                        ListViewItem it = new ListViewItem(when);
+                        it.SubItems.Add(cnt);
+                        it.SubItems.Add(id == current ? "（当前）" + title : title);
+                        it.SubItems.Add(preview);
+                        if (list.Items.Count % 2 == 1) it.BackColor = Color.FromArgb(248, 250, 252);
+                        list.Items.Add(it);
+                        ids.Add(id);
+                    }
+                }
+                hint.Text = "共 " + ids.Count + " 个会话" + (q.Length > 0 ? "（搜「" + q + "」）" : "") + "。";
+            }
+            catch (Exception ex)
+            {
+                hint.Text = "读不到会话列表：" + ex.Message;
+            }
+        }
+
+        void Accept()
+        {
+            if (list.SelectedIndices.Count == 0) return;
+            int i = list.SelectedIndices[0];
+            if (i < 0 || i >= ids.Count) return;
+            PickedSession = ids[i];
+            DialogResult = DialogResult.OK;
+            Close();
         }
     }
 

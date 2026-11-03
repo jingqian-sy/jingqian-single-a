@@ -414,6 +414,50 @@ async function handleApi(req, res, url) {
     }
   }
 
+  // ---------- 会话列表：能翻以前的对话、按关键词搜 ----------
+  if (p === '/api/sessions') {
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 200);
+    const query = String(url.searchParams.get('query') || '').trim().toLowerCase();
+    const dir = path.join(her.dataDir, 'sessions');
+    let items = [];
+    let files = [];
+    try { files = fs.readdirSync(dir); } catch (e) { files = []; }
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      const id = f.slice(0, -5);
+      // 测试/自检跑出来的会话别混进「以前的对话」（要看得传 includeTests=1）
+      if (!url.searchParams.get('includeTests')
+        && /^(quality|test|guard|cap|flow|dbg|multi|fix|people|clean|say-then|renchen|web[0-9]|speed|final|p[0-9]|f[0-9]|bm|q[0-9])/i.test(id)) continue;
+      let j = null;
+      let stat = null;
+      try {
+        stat = fs.statSync(path.join(dir, f));
+        j = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      } catch (e) { continue; }
+      const raw = Array.isArray(j) ? j : ((j && j.messages) || []);
+      const msgs = raw.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim());
+      if (!msgs.length) continue;
+      const firstUser = msgs.find((m) => m.role === 'user');
+      const head = String((firstUser || msgs[0]).content).replace(/\s+/g, ' ').trim();
+      const hit = query ? msgs.some((m) => String(m.content || '').toLowerCase().indexOf(query) >= 0) : true;
+      if (!hit) continue;
+      const last = msgs[msgs.length - 1];
+      let summary = '';
+      try { summary = String(her.loadSummary(id) || '').replace(/\s+/g, ' ').trim(); } catch (e) { summary = ''; }
+      items.push({
+        id,
+        title: truncate(head, 48) || '(没写字的对话)',
+        count: msgs.length,
+        last_role: last.role,
+        preview: truncate(String(last.content || '').replace(/\s+/g, ' ').trim(), 80),
+        summary: truncate(summary, 120),
+        updated_at: (j && j.updated_at) || (stat ? stat.mtime.toISOString() : '')
+      });
+    }
+    items.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+    return json(res, 200, { ok: true, query, count: items.length, items: items.slice(0, limit) });
+  }
+
   if (p === '/api/history') {
     const limit = Math.min(Number(url.searchParams.get('limit')) || 40, 200);
     let msgs = [];
