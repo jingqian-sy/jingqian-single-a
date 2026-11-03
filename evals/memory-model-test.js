@@ -12,8 +12,9 @@
 const fs = require('fs');
 const path = require('path');
 const { Store } = require('../src/memory/store');
-const { recall } = require('../src/memory/retrieve');
+const { recall, stabilityDays, retrievability } = require('../src/memory/retrieve');
 const { classify, scoreImportance, isEmotional } = require('../src/memory/classify');
+const { People } = require('../src/memory/people');
 
 const TMP = path.join(__dirname, '.run', 'memory-model');
 let fails = 0;
@@ -61,6 +62,20 @@ function ok(name, cond, extra) {
   ok('约定类重要度 4', scoreImportance('约定每周三晚上打球') === 4, scoreImportance('约定每周三晚上打球'));
   ok('自动捕获封顶 3', scoreImportance('用户喜欢喝冰美式', 'auto-capture') <= 3, scoreImportance('用户喜欢喝冰美式', 'auto-capture'));
 
-  console.log(fails ? ('失败 ' + fails + ' 条') : '全部通过（9 条）');
+  // 间隔复习：用过的记得更牢
+  const fresh = { importance: 2, use_count: 0, created_at: new Date().toISOString() };
+  const used = { importance: 2, use_count: 10, created_at: new Date().toISOString() };
+  ok('用过的稳定性更高', stabilityDays(used) > stabilityDays(fresh), [stabilityDays(fresh), stabilityDays(used)]);
+  ok('钉住的不衰减', retrievability({ pinned: true, importance: 1 }) === 1, retrievability({ pinned: true }));
+
+  // 人物表：认人
+  const people = new People(path.join(TMP, 'people'));
+  ok('默认有 owner', people.list().some((p) => p.id === 'owner'), people.list().map((p) => p.id));
+  ok('按别名认人', (people.whoSaid('老爸今天累了') || {}).id === 'owner', people.whoSaid('老爸今天累了'));
+  people.upsert({ name: '小李', aliases: ['小李', '阿李'], relation: '朋友' });
+  ok('新人物能认出来', (people.whoSaid('阿李来了') || {}).name === '小李', people.whoSaid('阿李来了'));
+  ok('陌生人不会被乱认', people.whoSaid('今天天气不错') === null, people.whoSaid('今天天气不错'));
+
+  console.log(fails ? ('失败 ' + fails + ' 条') : '全部通过（14 条）');
   process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error('FAIL ' + e.message); process.exit(1); });

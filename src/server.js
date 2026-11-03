@@ -323,13 +323,27 @@ async function handleApi(req, res, url) {
     }
   }
 
+  // ---------- 人物表（认人用；默认 owner=老爸） ----------
+  if (p === '/api/people' && req.method === 'GET') {
+    return json(res, 200, { ok: true, people: her.people.list() });
+  }
+  if (p === '/api/people' && req.method === 'POST') {
+    if (!isLocal(req)) return denyRemote(res);
+    const body = await readBody(req);
+    if (body.remove) return json(res, 200, her.people.remove(String(body.remove)));
+    return json(res, 200, her.people.upsert(body));
+  }
+
   if (p === '/api/memory' && req.method === 'GET') {
     const q = url.searchParams.get('query');
+    const person = url.searchParams.get('person');
     if (q) {
       const r = await her.recallBlock(q);
       return json(res, 200, { ok: true, query: q, used_vector: r.used_vector, hits: r.hits });
     }
-    return json(res, 200, { ok: true, count: her.store.count(), items: her.store.active().slice(-50).reverse() });
+    let items = her.store.active();
+    if (person) items = items.filter((x) => (x.person || 'owner') === person);
+    return json(res, 200, { ok: true, count: items.length, people: her.people.list(), items: items.slice(-50).reverse() });
   }
 
   if (p === '/api/memory' && req.method === 'POST') {

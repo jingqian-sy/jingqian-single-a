@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { Router } = require('./router');
 const { Store } = require('./memory/store');
+const { People } = require('./memory/people');
 const { EventLayer } = require('./memory/event');
 const { recall, forPrompt, kindOf } = require('./memory/retrieve');
 const { classify, scoreImportance } = require('./memory/classify');
@@ -118,6 +119,7 @@ class Her {
     ensureDir(this.dataDir); ensureDir(this.sessDir); ensureDir(this.workspace);
 
     this.store = new Store(path.join(this.dataDir, 'memory'));
+    this.people = new People(path.join(this.dataDir, 'memory'));
     this.events = new EventLayer(path.join(this.dataDir, 'memory'), { windowDays: (this.cfg.memory && this.cfg.memory.eventWindowDays) || 7 });
     this.router = new Router(this.cfg, this.dataDir);
     this.audit = safety.makeAuditor(path.join(this.dataDir, 'audit.log'), 'core');
@@ -341,7 +343,10 @@ class Her {
     if (!text) return null;
     const cls = classify(text);
     const imp = pinned ? 4 : scoreImportance(text, 'auto-capture');
-    const it = this.store.add({ text: toUserFact(text), kind: cls, importance: imp, pinned, source: 'auto-capture' });
+    // 认人：句子里出现了谁的名字/别名，就挂到那个人名下；没有就是 owner
+    const who = this.people.whoSaid(raw);
+    const personId = who ? who.id : 'owner';
+    const it = this.store.add({ text: toUserFact(text), kind: cls, importance: imp, pinned, source: 'auto-capture', person: personId });
     // 他说「不对，我喜欢咖啡」这种更正：把同动词的旧偏好顶掉，别两条并存
     if (it && /^(不对|不是|说错|改口|改成|其实)/.test(raw)) {
       const fact = toUserFact(text);

@@ -32,10 +32,20 @@ function kindOf(text) {
   return 'echo';
 }
 
-function decayWeight(item) {
+// 间隔复习（搬自 DSH 记忆服务）：越重要的记得越牢，被用过越多次衰减越慢
+function stabilityDays(item) {
+  const imp = Number(item.importance) || 1;
+  const reviews = Math.min(20, Number(item.use_count) || 0);
+  return (HALF_LIFE[imp] || 45) * (1 + reviews * 0.12);
+}
+
+function retrievability(item) {
   if (item.pinned) return 1;
-  const hl = HALF_LIFE[item.importance] || 45;
-  return Math.pow(0.5, daysAgo(item.updated_at || item.created_at) / hl);
+  return Math.pow(0.5, daysAgo(item.updated_at || item.created_at) / stabilityDays(item));
+}
+
+function decayWeight(item) {
+  return retrievability(item);
 }
 
 function buildIndex(items) {
@@ -144,4 +154,4 @@ async function recall(store, query, opts) {
   return { hits, used_vector: usedVector, block };
 }
 
-module.exports = { recall, decayWeight, HALF_LIFE, forPrompt, kindOf };
+module.exports = { recall, decayWeight, HALF_LIFE, forPrompt, kindOf, retrievability, stabilityDays };
