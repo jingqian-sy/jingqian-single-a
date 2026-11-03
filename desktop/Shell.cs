@@ -2747,7 +2747,7 @@ namespace JingqianShell
         readonly string repoRoot;
         TextBox txtUrl, txtPort, txtBase, txtModel, txtKey;
         ComboBox cmbTier, cmbSandbox;
-        TextBox txtWhitelist, txtQQUrl, txtQQToken, txtQQWs, txtQQWsToken;
+        TextBox txtWhitelist, txtQQUrl, txtQQToken;
         ComboBox cmbQQKind;
         CheckBox chkQQDryRun, chkQQEnable;
         CheckBox chkMemory, chkShowKey;
@@ -3087,48 +3087,41 @@ namespace JingqianShell
             btnQQUnlink.Enabled = false;
             btnQQUnlink.Click += delegate { QQDisconnect(); };
 
-            Cap("网关地址", 14, 730);
+            Cap("网关地址（HTTP 或 WS）", 14, 730);
             txtQQUrl = Box(14, 750, 380);
             txtQQUrl.AccessibleName = "cfgQQUrl";
-            Cap("令牌", 408, 730);
-            txtQQToken = Box(408, 750, 202);
-            txtQQToken.PasswordChar = '*';
-            txtQQToken.AccessibleName = "cfgQQToken";
-
-            // 上面 HTTP 行和下面 WS 行二选一；启用/只记录两个开关在 WS 行下一排
-
-            Cap("OneBot WS 地址（WS 直连时）", 14, 784);
-            txtQQWs = Box(14, 804, 300);
-            txtQQWs.AccessibleName = "cfgQQWs";
-            Cap("WS 令牌", 320, 784);
-            txtQQWsToken = Box(320, 804, 180);
-            txtQQWsToken.PasswordChar = '*';
-            txtQQWsToken.AccessibleName = "cfgQQWsToken";
+            Cap("接入方式", 408, 730);
             cmbQQKind = new ComboBox();
             cmbQQKind.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbQQKind.Font = Theme.Ui(9f, false);
-            cmbQQKind.SetBounds(Dpi.X(508), Dpi.X(804), Dpi.X(102), Dpi.X(26));
+            cmbQQKind.SetBounds(Dpi.X(408), Dpi.X(750), Dpi.X(202), Dpi.X(26));
             cmbQQKind.Items.Add("HTTP 推送");
             cmbQQKind.Items.Add("WS 直连");
             cmbQQKind.SelectedIndex = 0;
             cmbQQKind.AccessibleName = "cfgQQKind";
             contentPanel.Controls.Add(cmbQQKind);
+            Cap("令牌", 14, 784);
+            txtQQToken = Box(14, 804, 380);
+            txtQQToken.PasswordChar = '*';
+            txtQQToken.AccessibleName = "cfgQQToken";
             chkQQDryRun = new CheckBox();
             chkQQDryRun.Text = "先只记录，不自动回复";
             chkQQDryRun.Font = Theme.Ui(8.5f, false);
             chkQQDryRun.ForeColor = Theme.Text;
             chkQQDryRun.Checked = true;
-            chkQQDryRun.SetBounds(Dpi.X(14), Dpi.X(834), Dpi.X(220), Dpi.X(20));
+            chkQQDryRun.SetBounds(Dpi.X(408), Dpi.X(806), Dpi.X(202), Dpi.X(20));
             chkQQDryRun.AccessibleName = "cfgQQDryRun";
             contentPanel.Controls.Add(chkQQDryRun);
             chkQQEnable = new CheckBox();
             chkQQEnable.Text = "启用 QQ 桥接";
             chkQQEnable.Font = Theme.Ui(8.5f, false);
             chkQQEnable.ForeColor = Theme.Text;
-            chkQQEnable.SetBounds(Dpi.X(240), Dpi.X(834), Dpi.X(160), Dpi.X(20));
+            chkQQEnable.SetBounds(Dpi.X(408), Dpi.X(784), Dpi.X(160), Dpi.X(20));
             chkQQEnable.AccessibleName = "cfgQQEnable";
             contentPanel.Controls.Add(chkQQEnable);
 
+            // 提示收在下面一行，别占太多地方
+            Hint("网关地址就是它的 HTTP 地址（如 http://127.0.0.1:5700）或 WS 地址（如 ws://127.0.0.1:3001）；令牌两边通用。", 14, 834);
             // ---------- 中控台（运行状态 + 选路 + 记忆参数） ----------
             Section("中控台", 14, 872);
             lblStatus = new Label();
@@ -3712,8 +3705,10 @@ namespace JingqianShell
                 txtQQUrl.Text = qqGateway;
                 txtQQToken.Text = qqToken;
                 if (cmbQQKind != null) cmbQQKind.SelectedIndex = (qqKind == "onebot-ws" || qqKind == "snowluma") ? 1 : 0;
-                if (txtQQWs != null) txtQQWs.Text = qqWsUrl;
-                if (txtQQWsToken != null) txtQQWsToken.Text = qqAccessToken;
+                // 地址/令牌两边通用：HTTP 填网关地址，WS 填 ws 地址
+                bool kindIsWs = qqKind == "onebot-ws" || qqKind == "snowluma";
+                txtQQUrl.Text = kindIsWs ? (qqWsUrl.Length > 0 ? qqWsUrl : qqGateway) : (qqGateway.Length > 0 ? qqGateway : qqWsUrl);
+                txtQQToken.Text = qqAccessToken.Length > 0 ? qqAccessToken : qqToken;
                 if (chkQQDryRun != null) chkQQDryRun.Checked = qqDryRun;
                 if (chkQQEnable != null) chkQQEnable.Checked = qqConnected;
                 UpdateQQState();
@@ -4040,7 +4035,7 @@ namespace JingqianShell
         public void ScrollToQQForShot()
         {
             try {
-                if (txtQQWs != null) contentPanel.ScrollControlIntoView(txtQQWs);
+                if (txtQQUrl != null) contentPanel.ScrollControlIntoView(txtQQUrl);
                 else contentPanel.ScrollControlIntoView(btnQQFind);
                 Application.DoEvents();
             } catch { }
@@ -4227,10 +4222,12 @@ namespace JingqianShell
                 bool qqUseWs = cmbQQKind != null && cmbQQKind.SelectedIndex == 1;
                 qb["enabled"] = chkQQEnable != null ? chkQQEnable.Checked : qqConnected;
                 qb["kind"] = qqUseWs ? "onebot-ws" : "onebot-http";
-                qb["gateway"] = txtQQUrl.Text.Trim();
-                qb["httpUrl"] = txtQQUrl.Text.Trim();
-                qb["wsUrl"] = txtQQWs != null ? txtQQWs.Text.Trim() : "";
-                qb["accessToken"] = txtQQWsToken != null ? txtQQWsToken.Text.Trim() : "";
+                string qqAddr = txtQQUrl.Text.Trim();
+                string qqTok = txtQQToken.Text.Trim();
+                qb["gateway"] = qqAddr;
+                qb["httpUrl"] = qqAddr;
+                qb["wsUrl"] = qqAddr;
+                qb["accessToken"] = qqTok;
                 qb["dryRun"] = chkQQDryRun == null || chkQQDryRun.Checked;
                 qb["token"] = txtQQToken.Text.Length > 0 ? txtQQToken.Text : qqToken;
                 qb["url"] = txtQQUrl.Text.Trim();
