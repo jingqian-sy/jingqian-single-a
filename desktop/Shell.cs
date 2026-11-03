@@ -1146,18 +1146,26 @@ namespace JingqianShell
             topHost.Controls.Add(toolPanel);
 
             int tx = Dpi.X(12);
-            ToolBtn(toolPanel, ref tx, "新对话", false, delegate
+            tip = new ToolTip();
+            Button bNew = ToolBtn(toolPanel, ref tx, "新对话", false, delegate
             {
                 chatView.Clear();
                 caption.StatusText = "已清空显示";
                 caption.Invalidate();
             });
-            ToolBtn(toolPanel, ref tx, "状态", false, delegate { ShowStatus(); });
-            ToolBtn(toolPanel, ref tx, "记忆", false, delegate { OpenMemory(); });
-            ToolBtn(toolPanel, ref tx, "插件", false, delegate { OpenPlugins(); });
-            ToolBtn(toolPanel, ref tx, "上手", false, delegate { OpenTutorial(true); });
-            ToolBtn(toolPanel, ref tx, "设置", true, delegate { OpenSettings(); });
+            Button bState = ToolBtn(toolPanel, ref tx, "状态", false, delegate { ShowStatus(); });
+            Button bMem = ToolBtn(toolPanel, ref tx, "记忆", false, delegate { OpenMemory(); });
+            Button bPlug = ToolBtn(toolPanel, ref tx, "插件", false, delegate { OpenPlugins(); });
+            Button bHelp = ToolBtn(toolPanel, ref tx, "上手", false, delegate { OpenTutorial(true); });
+            Button bSet = ToolBtn(toolPanel, ref tx, "设置", true, delegate { OpenSettings(); });
             btnVoice = ToolBtn(toolPanel, ref tx, "朗读", false, delegate { ToggleVoice(); });
+            tip.SetToolTip(bNew, "清空显示（历史还在）");
+            tip.SetToolTip(bState, "服务状态、哪家模型、今天用了多少");
+            tip.SetToolTip(bMem, "她记得的事：能搜能删");
+            tip.SetToolTip(bPlug, "小功能：装、启用、卸载");
+            tip.SetToolTip(bHelp, "四步上手教程");
+            tip.SetToolTip(bSet, "填模型密钥、选路、语音、人格");
+            tip.SetToolTip(btnVoice, "把她的话念出来（本机语音，不联网）");
 
             // 模型快捷切换：下拉里点一下就换，不用进设置、不用重启服务
             modelBox = new ComboBox();
@@ -1284,7 +1292,6 @@ namespace JingqianShell
             clockLabel.ForeColor = Theme.Dim;
             clockLabel.Font = Theme.Ui(8.5f, false);
             bottom.Controls.Add(clockLabel);
-            tip = new ToolTip();
             tip.SetToolTip(statsLabel, "鼠标停在这里看今天用量");
             Controls.Add(bottom);
 

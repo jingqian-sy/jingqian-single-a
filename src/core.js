@@ -205,6 +205,36 @@ class Her {
     } catch (e) {}
   }
 
+  // 记忆每日快照：每天第一次启动（或跨天）把记忆库复制到 data/backups/memory/<日期>/，留最近 7 份
+  snapshotMemory() {
+    const day = new Date();
+    const key = day.getFullYear() + '-' + String(day.getMonth() + 1).padStart(2, '0') + '-' + String(day.getDate()).padStart(2, '0');
+    const flagFile = path.join(this.dataDir, 'memory-snapshot.json');
+    const flag = readJson(flagFile, {});
+    if (flag.day === key) return { ok: true, skipped: true, day: key };
+    const root = path.join(this.dataDir, 'backups', 'memory');
+    const dir = path.join(root, key);
+    try {
+      ensureDir(dir);
+      const memDir = path.join(this.dataDir, 'memory');
+      for (const f of ['memories.json', 'people.json', 'events.json']) {
+        const src = path.join(memDir, f);
+        if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, f));
+      }
+      writeJson(flagFile, { day: key, at: nowIso() });
+      // 只留最近 7 份
+      try {
+        const dirs = fs.readdirSync(root).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+        for (const old of dirs.slice(0, Math.max(0, dirs.length - 7))) {
+          fs.rmSync(path.join(root, old), { recursive: true, force: true });
+        }
+      } catch (e) {}
+      return { ok: true, day: key, dir };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
   async retryDistillQueue() {
     let q;
     try { q = readJson(this.queueFile(), { items: [] }); } catch (e) { return 0; }

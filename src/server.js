@@ -51,6 +51,8 @@ const CONFIG_FILE = process.env.JQ_CONFIG ? path.resolve(ROOT, process.env.JQ_CO
 const her = new Her({ root: ROOT, cfg });
 // 上次没提炼成的，服务起来后补一次（失败不丢、可追溯）
 try { her.retryDistillQueue().catch(() => {}); } catch (e) {}
+// 记忆每日自动快照（每天第一次启动时做，留最近 7 份）
+try { her.snapshotMemory(); } catch (e) {}
 let lastChat = null;
 const PORT = Number(process.env.PORT || cfg.port || 7889);
 const HOST = cfg.host || '127.0.0.1';
