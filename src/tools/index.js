@@ -11,6 +11,7 @@ const path = require('path');
 const safety = require('../safety');
 const sandbox = require('../sandbox');
 const extras = require('./extras');
+const { ToolRegistry } = require('./registry');
 const historySearch = require('../history-search');
 const { forPrompt } = require('../memory/retrieve');
 const { readJson, writeJson, ensureDir, truncate, nowIso } = require('../util');
@@ -171,6 +172,8 @@ class Tools {
     // 插件注册上来的工具：插件只加这两张表，核心代码不动
     this.pluginDefs = [];
     this.pluginFns = {};
+    // 工具契约：把「有哪些」和「这次给哪几个」分开（2.0 · M1）
+    this.registry = new ToolRegistry(this);
   }
 
   // 插件用：注册一个工具（名字不能和内建的重）
@@ -295,7 +298,9 @@ class Tools {
   }
 
   remember(args) {
-    const it = this.ctx.store.add({
+    // 走记忆契约（2.0 · M1）：换过实现就记到新的那份里去
+    const mem = this.ctx.memory || this.ctx.store;
+    const it = mem.remember({
       text: userFact(args.text),
       kind: args.kind,
       importance: args.importance,

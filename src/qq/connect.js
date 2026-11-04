@@ -41,6 +41,8 @@ function logLine(dataDir, entry) {
  */
 function localGatewaySecrets() {
   const out = [];
+  // 测试用：别扫本机真网关。CI 跑在开发者自己的电脑上，扫到真的就会顶掉假网关
+  if (process.env.JQ_NO_LOCAL_SCAN) return out;
   const home = process.env.USERPROFILE || process.env.HOME || '';
   if (!home) return out;
   const dirs = [

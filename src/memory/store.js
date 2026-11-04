@@ -43,6 +43,31 @@ class Store {
   active() { return this.data.items.filter((x) => x.status !== 'archived'); }
   count() { return this.active().length; }
 
+  // ---- 记忆契约（2.0 · M1）----
+  // 外部实现只要提供 remember / forget / search 三个动作，就能顶替内置这份。
+  // 内部其余能力（active/get/archive）属于实现细节，不写进契约。
+  remember(input) {
+    const it = (input && typeof input === 'object') ? input : { text: String(input || '') };
+    return this.add(it);
+  }
+
+  forget(idOrText) {
+    const k = String(idOrText || '').trim();
+    if (!k) return null;
+    if (this.get(k)) return this.archive(k);
+    const hit = this.active().find((x) => String(x.text || '').indexOf(k) >= 0);
+    return hit ? this.archive(hit.id) : null;
+  }
+
+  search(query, topK) {
+    const q = String(query || '').trim();
+    if (!q) return [];
+    const terms = q.split(/\s+/).filter(Boolean);
+    return this.active()
+      .filter((x) => terms.some((t) => String(x.text || '').indexOf(t) >= 0))
+      .slice(0, Math.max(1, Number(topK) || 8));
+  }
+
   get(id) { return this.data.items.find((x) => x.id === id) || null; }
 
   // 同一件事换个说法（「用户喜欢X」/「他喜欢X」）算冲突：只留说话人那条

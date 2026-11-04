@@ -155,6 +155,9 @@ class Her {
     ensureDir(this.dataDir); ensureDir(this.sessDir); ensureDir(this.workspace);
 
     this.store = new Store(path.join(this.dataDir, 'memory'));
+    // 记忆契约门面：内部默认指向上面这份；外部可以 setMemory() 整个换掉，
+    // 只要求 remember / search / forget 三个动作（2.0 · M1）。
+    this.memory = this.store;
     this.people = new People(path.join(this.dataDir, 'memory'));
     this.events = new EventLayer(path.join(this.dataDir, 'memory'), { windowDays: (this.cfg.memory && this.cfg.memory.eventWindowDays) || 7 });
     this.router = new Router(this.cfg, this.dataDir);
@@ -165,6 +168,7 @@ class Her {
       root: this.root,
       workspace: this.workspace,
       store: this.store,
+      memory: this.memory,
       events: this.events,
       audit: this.audit,
       dataDir: this.dataDir,
@@ -356,7 +360,7 @@ class Her {
       if (!t || t.length < 4) continue;
       if (existing.some((e) => e && e.status !== 'archived' && looksSameFact(e.text, t))) continue;
       try {
-        const saved = this.store.add({
+        const saved = this.memory.remember({
           text: t,
           kind: classify(t),
           importance: (it && it.pinned) ? 4 : scoreImportance(t, 'distill'),
@@ -422,8 +426,14 @@ class Her {
 
   // 工具渐进披露：前两步先只给「看」的工具，别一上来塞满。
   // allowTools === false = 这一轮不挂工具（对话模式 / 带图片的轮次）。
-  toolsForStep(step, taskText, allowTools) {
+  toolsForStep(step, taskText, allowTools, opts) {
     if (allowTools === false) return [];
+    // 场景优先：config.tools.defaultProfile 或调用方显式指定时，按场景给工具。
+    // 不配就走原来的逻辑，行为一点不变（2.0 · M1）。
+    const profile = (opts && opts.profile) || ((this.cfg.tools && this.cfg.tools.defaultProfile) || null);
+    if (profile) {
+      try { return this.tools.registry.defs(profile); } catch (e) { /* 回退到全量 */ }
+    }
     const all = this.tools.defs();
     if (step >= 1) return all;
     const isTask = /写|建|改|删|跑|执行|存|提醒|记住|画|生成/.test(String(taskText || ''));
@@ -481,6 +491,19 @@ class Her {
       .concat([{ role: 'user', content: modeNote + groupNote + asked + userContent }]);
   }
 
+  // 换掉记忆的实现（2.0 · M1 契约）：只认 remember / search / forget 三个动作。
+  // 换进来之后，记东西的地方（自动记住、整理）都走新实现。
+  setMemory(impl) {
+    if (!impl || ['remember', 'search', 'forget'].some((k) => typeof impl[k] !== 'function')) {
+      throw new Error('记忆实现要提供 remember / search / forget 三个方法');
+    }
+    this.memory = impl;
+    this.memorySwapped = true;
+    // 工具层手里也有一份引用，一起换掉，不然记东西还是记到旧的那份
+    if (this.tools && this.tools.ctx) this.tools.ctx.memory = impl;
+    return true;
+  }
+
   // 换模式时把「这个会话上次是谁答的」清掉：切回对话模式就该回到免费的家，别一直挂在付费那家
   resetSessionProviders() {
     this.sessionProvider = {};
@@ -514,7 +537,7 @@ class Her {
     const who = speaker ? null : this.people.whoSaid(raw);
     const personId = speaker ? ('p_qq_' + (speaker.id || speaker.name)) : (who ? who.id : 'owner');
     const personName = speaker ? speaker.name : '用户';
-    const it = this.store.add({ text: toPersonFact(text, personName), kind: cls, importance: imp, pinned, source: speaker ? 'qq-group' : 'auto-capture', person: personId });
+    const it = this.memory.remember({ text: toPersonFact(text, personName), kind: cls, importance: imp, pinned, source: speaker ? 'qq-group' : 'auto-capture', person: personId });
     // 他说「不对，我喜欢咖啡」这种更正：把同动词的旧偏好顶掉，别两条并存
     if (it && /^(不对|不是|说错|改口|改成|其实)/.test(raw)) {
       const fact = toPersonFact(text, personName);
@@ -698,7 +721,10 @@ class Her {
     let retriedCloud = false;
     // 带图片的这轮不挂工具：视觉模型多半不带工具，先让她把图看明白；
     // 对话模式则整轮都不挂工具。
-    const useTools = workMode && !images.length;
+    // 外部工具（换脑）：对方把它的工具清单递过来，我们只负责「要不要调、调哪个」，
+    // 真正执行由对方去做——所以这一轮只走一步，把 tool_calls 原样交回去。
+    const externalTools = Array.isArray(opts.externalTools) ? opts.externalTools : null;
+    const useTools = (workMode || !!externalTools) && !images.length;
     this._selfFix = false;
     this._selfFix2 = false;
     let planText = '';
@@ -745,7 +771,7 @@ class Her {
       };
       let res;
       try {
-        res = await this.router.call(messages, this.toolsForStep(step, text, useTools), callOpts);
+        res = await this.router.call(messages, externalTools || this.toolsForStep(step, text, useTools), callOpts);
       } catch (e) {
         if (e.code === 'NO_VISION') {
           const names = images.map((x) => x.name).join('、');
@@ -796,6 +822,16 @@ class Her {
       }
       messages.push(msg);
       if (msg.tool_calls && msg.tool_calls.length) {
+        // 换脑：工具是对方的，我们一个都不执行，原样交回去让它自己跑
+        if (externalTools) {
+          return {
+            reply: '',
+            toolCalls: msg.tool_calls,
+            stats: { passthrough: true, steps: steps, provider: provider, ms: Date.now() - started },
+            memory: null,
+            trace: []
+          };
+        }
         for (const call of msg.tool_calls) {
           let args = {};
           try { args = JSON.parse(call.function.arguments || '{}'); } catch (e) { args = { _raw: call.function.arguments }; }

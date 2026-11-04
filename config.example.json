@@ -181,5 +181,11 @@
   "mcp": {
     "enabled": false,
     "servers": []
-  }
+  },
+  "openaiApi": {
+    "enabled": true,
+    "token": "",
+    "timeoutSeconds": 120
+  },
+  "openaiApiNote": "换脑：让别的 AI 客户端（DSH、Cherry Studio 这类认 OpenAI 格式的）直接由她来答，用她的人格和记忆。地址填 http://127.0.0.1:7889/v1，模型名填 jingqian。只认本机；enabled=false 就整个关掉；token 留空=本机谁都能调，填了就要求 Authorization: Bearer <token>。第一版只能聊天，还不能替对方调工具。"
 }

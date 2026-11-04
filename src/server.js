@@ -23,6 +23,7 @@ const qq = require('./qq/adapter');
 const qqConnect = require('./qq/connect');
 const attach = require('./attach');
 const { NAME_RE, copyDir } = require('./plugins');
+const openaiApi = require('./openai-api');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -855,6 +856,7 @@ function serveStatic(req, res, url) {
 const server = http.createServer({ maxHeaderSize: 64 * 1024 }, async (req, res) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   try {
+    if (url.pathname.startsWith('/v1')) return await openaiApi.handle(req, res, url, { her, isLocal });
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
     return serveStatic(req, res, url);
   } catch (e) {

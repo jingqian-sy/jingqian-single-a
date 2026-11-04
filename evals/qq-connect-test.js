@@ -58,7 +58,7 @@ async function waitServer(timeoutMs) {
 
   const child = spawn(process.execPath, [path.join(ROOT, 'src', 'server.js')], {
     cwd: ROOT,
-    env: Object.assign({}, process.env, { PORT: String(APP_PORT), JQ_CONFIG: cfgFile, JQ_DATA_DIR: 'data/qq-connect-test/data' }),
+    env: Object.assign({}, process.env, { PORT: String(APP_PORT), JQ_CONFIG: cfgFile, JQ_DATA_DIR: 'data/qq-connect-test/data', JQ_NO_LOCAL_SCAN: '1' }),
     stdio: 'ignore', windowsHide: true
   });
 
