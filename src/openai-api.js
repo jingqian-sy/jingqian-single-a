@@ -17,6 +17,7 @@
  */
 const crypto = require('crypto');
 const { tokenCount } = require('./util');
+const safety = require('./safety');
 
 function json(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -228,20 +229,43 @@ async function handle(req, res, url, ctx) {
       total_tokens: tokenCount(input) + tokenCount(reply)
     };
 
-    // 她要调工具：按 OpenAI 的格式把调用交回去，由对方执行
+    // 她要调工具：按 OpenAI 的格式交回去，由对方执行。
+    // 但交回去之前先过一道闸——对方的手我们管不到，只能在她「决定要调」这一刻拦。
     if (toolCalls) {
-      const norm = toolCalls.map((c, i) => ({
+      const passed = [];
+      const blocked = [];
+      for (const c of toolCalls) {
+        let a = {};
+        try { a = JSON.parse((c.function && c.function.arguments) || '{}'); } catch (e) { a = {}; }
+        const v = safety.checkExternal((c.function && c.function.name) || '', a);
+        if (v.allowed) passed.push(c); else blocked.push(v.note);
+      }
+      if (blocked.length && !passed.length) {
+        // 全被拦：不给 tool_calls，直接用人话回绝，别让壳以为能跑
+        const msg = blocked[0];
+        if (body.stream) return chunk(res, msg, { model: body.model });
+        return json(res, 200, {
+          id: 'chatcmpl-' + crypto.randomBytes(8).toString('hex'),
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: body.model || 'jingqian',
+          choices: [{ index: 0, message: { role: 'assistant', content: msg }, finish_reason: 'stop' }],
+          usage: usage
+        });
+      }
+      const norm = passed.map((c, i) => ({
         id: c.id || ('call_' + crypto.randomBytes(6).toString('hex') + '_' + i),
         type: 'function',
         function: { name: c.function && c.function.name, arguments: (c.function && c.function.arguments) || '{}' }
       }));
+      const warn = blocked.length ? blocked.join(' ') : '';
       if (body.stream) return chunkTools(res, norm, { model: body.model });
       return json(res, 200, {
         id: 'chatcmpl-' + crypto.randomBytes(8).toString('hex'),
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: body.model || 'jingqian',
-        choices: [{ index: 0, message: { role: 'assistant', content: reply || null, tool_calls: norm }, finish_reason: 'tool_calls' }],
+        choices: [{ index: 0, message: { role: 'assistant', content: (reply || '') + (warn ? '\n（另外一步被拦了：' + warn + '）' : ''), tool_calls: norm }, finish_reason: 'tool_calls' }],
         usage: usage
       });
     }

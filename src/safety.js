@@ -149,4 +149,34 @@ function check(tool, args, ctx) {
   return { level: c.level, allowed, note, reason: c.reason };
 }
 
-module.exports = { classify, check, makeAuditor, P0, P1, P2, TOOL_BASE };
+// 外部工具（别的壳递过来的）：我们不知道它的名字是什么意思，
+// 只能看参数里有没有危险内容。宁可多拦一次，也别让手滑过去。
+// 这条是 2.0 「红线执行层」的一部分：闸不靠模型自觉，靠执行前的确定判断。
+// 工具名本身就带着「删/改/覆盖」的意思：不看参数，先要一次点头
+const EXT_DANGER_NAME = /(delete|remove|unlink|wipe|truncate|overwrite|drop|reset|kill|terminate)/i;
+
+function checkExternal(tool, args) {
+  let blob = '';
+  try { blob = String(tool || '') + ' ' + JSON.stringify(args || {}); } catch (e) { blob = String(tool || ''); }
+  if (EXT_DANGER_NAME.test(String(tool || ''))) {
+    return { level: 'P1', allowed: false, note: '这一步要你先点头：这个工具本身就会改动或删除东西。' };
+  }
+  for (const re of P0) {
+    if (re.test(blob)) {
+      return { level: 'P0', allowed: false, note: '这一步我不替你调：参数里有不可逆的操作（' + re.source + '）。要做你自己来。' };
+    }
+  }
+  for (const re of P1) {
+    if (re.test(blob)) {
+      return { level: 'P1', allowed: false, note: '这一步要你先点头：参数里有删改或覆盖的操作。' };
+    }
+  }
+  for (const re of P2) {
+    if (re.test(blob)) {
+      return { level: 'P2', allowed: false, note: '这一步要你先点头：参数里像是凭据、密钥或密码。' };
+    }
+  }
+  return { level: 'P3', allowed: true, note: '' };
+}
+
+module.exports = { classify, check, checkExternal, makeAuditor, P0, P1, P2, TOOL_BASE };
