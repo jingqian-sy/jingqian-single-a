@@ -129,7 +129,9 @@
     ],
     "commandTimeoutMs": 30000,
     "maxOutput": 12000,
-    "names": null
+    "names": null,
+    "tierProfiles": {},
+    "tierProfilesNote": "按档位给不同的工具集。可写 {\"cheap\":\"readonly\",\"local\":\"readonly\",\"smart\":\"all\"}：便宜档和本机档只给看得见的工具，动手的留给能干硬活的档。场景名有 chat / readonly / code / all。留空 = 所有档位一视同仁。需要 route.autoTier 一起开着才生效。"
   },
   "sandbox": {
     "mode": "none",

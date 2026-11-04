@@ -25,6 +25,7 @@ const { Tools } = require('./tools');
 const { PluginHost } = require('./plugins');
 const { referenceGate } = require('./gates');
 const { AnswerCache } = require('./cache');
+const { classifyTier } = require('./route-classify');
 const { McpClient } = require('./mcp-client');
 const safety = require('./safety');
 const sandbox = require('./sandbox');
@@ -746,6 +747,17 @@ class Her {
     // 真正执行由对方去做——所以这一轮只走一步，把 tool_calls 原样交回去。
     const externalTools = Array.isArray(opts.externalTools) ? opts.externalTools : null;
     const useTools = (workMode || !!externalTools) && !images.length;
+
+    // 档位 → 工具场景（2.0）：便宜档只给「看得见的」，动手的留给能干的档。
+    // 没配 config.tools.tierProfiles 就什么都不变。
+    let tierProfile = null;
+    try {
+      const tp = (this.cfg.tools && this.cfg.tools.tierProfiles) || null;
+      if (tp && this.cfg.route && this.cfg.route.autoTier && useTools) {
+        const t = classifyTier(this.cfg, text, { needTools: useTools });
+        tierProfile = tp[t] || null;
+      }
+    } catch (e) { /* 配错了就当没配 */ }
     this._selfFix = false;
     this._selfFix2 = false;
     let planText = '';
@@ -792,7 +804,7 @@ class Her {
       };
       let res;
       try {
-        res = await this.router.call(messages, externalTools || this.toolsForStep(step, text, useTools), callOpts);
+        res = await this.router.call(messages, externalTools || this.toolsForStep(step, text, useTools, { profile: tierProfile }), callOpts);
       } catch (e) {
         if (e.code === 'NO_VISION') {
           const names = images.map((x) => x.name).join('、');
@@ -814,7 +826,7 @@ class Her {
         cost += res.stat.cost;
         try {
           const cloudOpts = Object.assign({}, callOpts, { skipLocal: true, prefer: '' });
-          res = await this.router.call(messages, this.toolsForStep(step, text, useTools), cloudOpts);
+          res = await this.router.call(messages, this.toolsForStep(step, text, useTools, { profile: tierProfile }), cloudOpts);
         } catch (e) {
           this.sessionProvider[sessionId] = '';
         }
