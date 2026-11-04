@@ -25,6 +25,13 @@ const { start: startMock } = require('./mock-provider');
 const ROOT = path.join(__dirname, '..');
 // CI 里关掉答案缓存：很多用例要求「这次真的调了模型」，缓存会让同一句话第二次直接返回旧的
 process.env.JQ_NO_CACHE = '1';
+// 干净仓库里没有 config.json（被 gitignore 了），但好几个用例要读它。
+// 拿示例补一份——这也和用户第一次启动时的行为一致。
+try {
+  const real = path.join(ROOT, 'config.json');
+  const ex = path.join(ROOT, 'config.example.json');
+  if (!fs.existsSync(real) && fs.existsSync(ex)) fs.copyFileSync(ex, real);
+} catch (e) { /* 补不上就让相关用例自己报错 */ }
 const CI_DATA = 'data/ci-run';
 const CI_CONFIG = 'config.ci.json';
 const MOCK_PORT = 18000 + (process.pid % 900); // 用 pid 派生端口，避免上次残留进程占着 18099 把 CI 卡死
