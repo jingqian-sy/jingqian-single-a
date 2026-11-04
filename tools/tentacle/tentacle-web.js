@@ -120,7 +120,7 @@ async function main() {
   }
 
   if (cmd === 'shot') {
-    const out = a[0] || ('D:/鲸倩核心/state/shots/web-' + Date.now() + '.png');
+    const out = a[0] || ('./state/shots/web-' + Date.now() + '.png');
     const { send, ws } = await connect();
     const r = await send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(out, Buffer.from(r.data, 'base64'));

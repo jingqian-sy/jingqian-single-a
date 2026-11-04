@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-把私有版（D:\\鲸倩核心）的记忆迁到开源版的 data/memory/memories.json。
+把私有版（<你的私有版目录>）的记忆迁到开源版的 data/memory/memories.json。
 
 来源两份，按「文字归一化后」去重，db 优先（字段更全）：
-  - D:\\鲸倩核心\\memory-service\\memory.db   （统一记忆服务，819 条，有 kind/status）
-  - D:\\鲸倩核心\\state\\memories-export.json （导出快照，782 条，没有 kind）
+  - <你的私有版目录>\\memory-service\\memory.db   （统一记忆服务，819 条，有 kind/status）
+  - <你的私有版目录>\\state\\memories-export.json （导出快照，782 条，没有 kind）
 
 映射：
   kind: emotional/relation/fact/lesson 原样；ephemeral -> fact（importance 压到 1，source 标 migrated:ephemeral）
@@ -24,8 +24,8 @@ import sqlite3
 import sys
 import time
 
-PRIVATE_DB = r'D:\鲸倩核心\memory-service\memory.db'
-PRIVATE_EXPORT = r'D:\鲸倩核心\state\memories-export.json'
+PRIVATE_DB = r'<你的私有版目录>\memory-service\memory.db'
+PRIVATE_EXPORT = r'<你的私有版目录>\state\memories-export.json'
 KINDS = {'emotional', 'relation', 'fact', 'lesson', 'preference'}
 
 

@@ -58,7 +58,9 @@ function judge(ev, q) {
   const kind = ev.message_type;
   if (kind === 'private') {
     if (!q.allow.includes(String(ev.user_id))) return { handle: false, reason: '私聊不在白名单' };
-    return { handle: true, kind: 'private', session: 'qq-p' + ev.user_id, peer: String(ev.user_id) };
+    // 私聊直接用桌面那条会话：QQ 里说的和窗口里说的，是同一段对话。
+    // 群聊仍然按群分开——群里是别人的上下文，不能混进私人对话。
+    return { handle: true, kind: 'private', session: 'desktop', peer: String(ev.user_id) };
   }
   if (kind === 'group') {
     if (!q.groups.includes(String(ev.group_id))) return { handle: false, reason: '群不在白名单' };
