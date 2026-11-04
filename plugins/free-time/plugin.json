@@ -1,0 +1,9 @@
+{
+  "name": "free-time",
+  "title": "自由时间",
+  "version": "1.0.0",
+  "description": "她闲着的时候会自己想找你说话：桌面窗口里冒一句，接了 QQ 也会发到 QQ。默认闲置 30 分钟起、一天最多 5 次、晚上十一点半到早上八点不打扰。",
+  "author": "鲸倩",
+  "main": "index.js",
+  "permissions": ["proactive", "route"]
+}

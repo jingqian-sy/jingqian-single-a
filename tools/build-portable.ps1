@@ -14,7 +14,7 @@ $zip = Join-Path $OutRoot ($name + '.zip')
 
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Path $out -Force | Out-Null
-foreach ($d in @('src', 'public', 'docs', 'plugins-example')) {
+foreach ($d in @('src', 'public', 'docs', 'plugins', 'plugins-example')) {
   $from = Join-Path $repo $d
   if (Test-Path $from) { robocopy $from (Join-Path $out $d) /E /NFL /NDL /NJH /NJS /NP /XD data .run .tmp | Out-Null }
 }

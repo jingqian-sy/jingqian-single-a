@@ -22,7 +22,7 @@ const { Her, toUserFact } = require('./core');
 const qq = require('./qq/adapter');
 const qqConnect = require('./qq/connect');
 const attach = require('./attach');
-const { NAME_RE } = require('./plugins');
+const { NAME_RE, copyDir } = require('./plugins');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -53,6 +53,44 @@ try {
   setOwnerAliases(cfg.ownerAliases);
 } catch (e) {}
 const CONFIG_FILE = process.env.JQ_CONFIG ? path.resolve(ROOT, process.env.JQ_CONFIG) : path.join(ROOT, 'config.json');
+
+// 随包带的内置插件：仓库里 plugins/ 是发布时带上的，第一次启动时装进 data/plugins 并默认开着。
+// 已经装过的目录不覆盖，免得把人家的设置冲掉。
+function installBuiltinPlugins() {
+  const src = path.join(ROOT, 'plugins');
+  if (!fs.existsSync(src)) return null;
+  const destRoot = path.join(ROOT, 'data', 'plugins');
+  let cur = {};
+  try { cur = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch (e) { cur = {}; }
+  const enabled = (cur.plugins && Array.isArray(cur.plugins.enabled)) ? cur.plugins.enabled.map(String) : [];
+  // 处理过的内置插件记一笔：以后用户自己关掉，重启也不会被重新打开
+  const done = (cur.plugins && Array.isArray(cur.plugins.builtin)) ? cur.plugins.builtin.map(String) : [];
+  let changed = false;
+  let dirs = [];
+  try { dirs = fs.readdirSync(src, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch (e) { return null; }
+  for (const name of dirs) {
+    if (done.indexOf(name) >= 0) continue;
+    const to = path.join(destRoot, name);
+    try {
+      if (!fs.existsSync(to)) {
+        copyDir(path.join(src, name), to);
+        console.log('  已装内置插件：' + name);
+      }
+      if (enabled.indexOf(name) < 0) enabled.push(name);
+      done.push(name);
+      changed = true;
+    } catch (e) { /* 单个装不上不影响启动 */ }
+  }
+  if (changed) {
+    cur.plugins = Object.assign({}, cur.plugins || {}, { enabled: enabled, builtin: done });
+    try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cur, null, 2), 'utf8'); } catch (e) {}
+  }
+  return enabled;
+}
+let builtinEnabled = null;
+try { builtinEnabled = installBuiltinPlugins(); } catch (e) {}
+if (builtinEnabled) cfg.plugins = Object.assign({}, cfg.plugins || {}, { enabled: builtinEnabled });
+
 const her = new Her({ root: ROOT, cfg });
 // 上次没提炼成的，服务起来后补一次（失败不丢、可追溯）
 try { her.retryDistillQueue().catch(() => {}); } catch (e) {}
@@ -62,6 +100,8 @@ try { her.snapshotMemory(); } catch (e) {}
 try { her.initMcp().catch(() => {}); } catch (e) {}
 // OneBot WS 直连（SnowLuma / NapCat / LLOneBot 都讲这个）：配置 qq.kind=onebot-ws 才启动；默认 dryRun 只记不回
 let snowluma = null;
+// 最近一次跟他说过话的 QQ 对象：插件想主动发 QQ 时按这个发
+let lastQQPeer = null;
 try {
   const q = cfg.qq || {};
   if (q.enabled && (q.kind === 'onebot-ws' || q.kind === 'snowluma')) {
@@ -75,6 +115,7 @@ try {
       onEvent: async (ev) => {
         try {
           const d = await qq.incoming({ cfg, her, dataDir: her.dataDir, ev });
+          if (d && d.peer) lastQQPeer = { peer: String(d.peer), kind: d.kind, at: Date.now() };
           if (d && d.ok && d.reply) {
             await qq.send({ cfg, dataDir: her.dataDir, to: d.peer, text: d.reply, group: d.kind === 'group', bridge: snowluma });
           }
@@ -84,6 +125,19 @@ try {
     snowluma.start();
   }
 } catch (e) { console.log('  ! SnowLuma 桥接没起来：' + e.message); }
+
+// 插件想自己开口发 QQ 时走这里：发给最近跟他说过话的那个人；群里就发回那个群。
+// 桥没连上就老实返回失败，别让插件以为发出去了。
+her.plugins.sendQQ = async (text) => {
+  const t = String(text || '').trim();
+  if (!t) return { ok: false, error: '没话可发' };
+  if (!lastQQPeer) return { ok: false, error: '还没人在 QQ 上找过她，不知道发给谁' };
+  if (!snowluma) return { ok: false, error: 'QQ 桥没连上' };
+  return await qq.send({
+    cfg, dataDir: her.dataDir, to: lastQQPeer.peer, text: t,
+    group: lastQQPeer.kind === 'group', bridge: snowluma
+  });
+};
 let lastChat = null;
 const PORT = Number(process.env.PORT || cfg.port || 7889);
 const HOST = cfg.host || '127.0.0.1';

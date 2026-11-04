@@ -185,7 +185,9 @@ class Her {
       cfg: this.cfg,
       configPath: this.tools.ctx.configPath,
       tools: this.tools,
-      store: this.store
+      store: this.store,
+      speakUp: (sid, o) => this.speakUp(sid, o),
+      idleMinutes: (sid) => this.idleMinutes(sid)
     });
     try { this.plugins.load(); } catch (e) { /* 插件加载失败不拖垮启动 */ }
     // 内置 MCP 客户端：默认关，配置了才启动；启动是异步的，不挡开窗
@@ -569,6 +571,56 @@ class Her {
     } finally {
       this._subRunning = false;
     }
+  }
+
+  // 自由时间：没人理她的时候，她自己起个头。
+  // 不从 chat() 走（那得要一条用户消息），这里单独组一次请求，说完直接写进历史，
+  // 窗口那边轮询会话就能看到；QQ 那边由插件拿着这句去发。
+  async speakUp(sessionId, opts) {
+    opts = opts || {};
+    const sid = sessionId || 'default';
+    const idleMin = Math.max(1, Number(opts.idleMinutes) || 30);
+    this._curSession = sid;
+    let history = this.loadHistory(sid);
+    try { history = await this.rollSummary(history, sid); } catch (e) {}
+    const recent = history.messages.slice(-8);
+    const lastUser = recent.slice().reverse().find((m) => m.role === 'user');
+    let recallRes = { block: '', hits: [] };
+    try { recallRes = await this.recallBlock(lastUser ? String(lastUser.content || '') : ''); } catch (e) {}
+    const parts = [];
+    const sum = this.loadSummary(sid);
+    if (sum) parts.push('【之前聊到的】\n' + forPrompt(sum));
+    if (recallRes && recallRes.block) parts.push('【参考记忆】\n' + recallRes.block);
+    try { const ev = this.events.block(3); if (ev) parts.push('【事件时间轴】\n' + forPrompt(ev)); } catch (e) {}
+    parts.push('（现在是自由时间：你已经 ' + idleMin + ' 分钟没跟他说话了。'
+      + '就说一句短话，像忽然想起他那样，一两句就够；可以问他在忙什么、说你在做什么、或者顺着你们上次聊的接着说。'
+      + '别只问「在吗」，别说教，别催他睡觉喝水，别提你等了多久，也别提时间。'
+      + '拿不准的事别提：别凭空说文件、文档、工作上的事，除非【参考记忆】里真有、或者你们刚才真的说过。'
+      + '只有实在不想开口的时候，才只回一个词：SILENT）');
+    const messages = [{ role: 'system', content: String(this.cfg.persona || DEFAULT_PERSONA) + '\n\n' + todayLine() }]
+      .concat(recent)
+      .concat([{ role: 'user', content: parts.join('\n\n') }]);
+    const res = await this.router.call(messages, [], {
+      taskText: '自由时间',
+      temperature: 0.95,
+      maxTokens: 160,
+      timeoutMs: ((this.cfg.budget && this.cfg.budget.perCallSeconds) || 45) * 1000
+    });
+    let reply = String((res.json.choices && res.json.choices[0] && res.json.choices[0].message && res.json.choices[0].message.content) || '').trim();
+    reply = reply.replace(/^[\s"'「『]+|[\s"'」』]+$/g, '').trim();
+    if (!reply || /^SILENT[。.!！]?$/i.test(reply)) return { spoke: false, reply: '' };
+    if (reply.length > 140) reply = reply.slice(0, 140);
+    history.messages.push({ role: 'assistant', content: reply });
+    this.saveHistory(sid, history);
+    return { spoke: true, reply, idleMinutes: idleMin };
+  }
+
+  // 会话最后一次动静（文件修改时间）到现在隔了几分钟：插件用它判断该不该开口
+  idleMinutes(sessionId) {
+    try {
+      const st = fs.statSync(this.sessionFile(sessionId || 'default'));
+      return Math.round((Date.now() - st.mtimeMs) / 60000);
+    } catch (e) { return -1; }
   }
 
   async chat(userText, opts) {

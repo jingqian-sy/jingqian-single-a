@@ -13,10 +13,14 @@
  *   ctx.registerRoute(method, path, fn)  注册本机接口 /api/plugin/<名字>/<path>
  *   ctx.memory.add(text, opts)           写一条记忆（和主程序同一个记忆库）
  *   ctx.memory.search(query)             搜记忆
+ *   ctx.proactive.say(opts)              让她自己开口说一句（走同一套人设和记忆）
+ *                                        opts: { sessionId, idleMinutes, target: 'qq' 会顺手发到 QQ }
+ *   ctx.proactive.idleMinutes(sessionId) 这个会话最后动静到现在隔了几分钟
+ *   ctx.tick(fn, ms)                     注册一个定时器（重载插件时会自动清掉）
  *   ctx.ui = { label, run }              界面里给一个按钮，点了跑 run()
  *
- * 权限要在 plugin.json 的 permissions 里写明（tool / route / ui / memory），
- * 没声明的调用会直接报错。
+ * 权限要在 plugin.json 的 permissions 里写明
+ * （tool / route / ui / memory / proactive），没声明的调用会直接报错。
  *
  * 说清楚风险：这一版是「可信插件」——插件和服务同一个进程、同样的权限，
  * 一个写坏的插件能把整个服务搞挂，也能读本机文件。只装你自己看过、信得过的插件。
@@ -27,7 +31,7 @@ const path = require('path');
 const { readJson, writeJson, ensureDir, appendJsonl } = require('./util');
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;
-const PERMISSIONS = ['tool', 'route', 'ui', 'memory'];
+const PERMISSIONS = ['tool', 'route', 'ui', 'memory', 'proactive'];
 
 function pluginsDir(dataDir) {
   return path.join(dataDir, 'plugins');
@@ -67,6 +71,13 @@ class PluginHost {
     this.configPath = opts.configPath;
     this.tools = opts.tools;
     this.store = opts.store;
+    // 「自己开口」的能力由主程序给：生成一段话（speakUp）、看会话闲置了多久（idleMinutes）
+    this.speakUp = opts.speakUp || null;
+    this.idleMinutes = opts.idleMinutes || null;
+    // 发到 QQ 的通道由 server 在起来之后接上（插件自己碰不到网关）
+    this.sendQQ = null;
+    // 插件注册的定时器：重新加载插件前必须清掉，否则会越滚越多
+    this.timers = [];
     this.dir = pluginsDir(this.dataDir);
     this.logFile = path.join(this.dataDir, 'plugins.log');
     ensureDir(this.dir);
@@ -135,6 +146,9 @@ class PluginHost {
 
   // 加载所有「已启用」的插件；单个插件出错只影响它自己
   load() {
+    // 先把上一轮插件挂的定时器全停掉：reload 一次不加一次
+    for (const t of this.timers) { try { clearInterval(t); } catch (e) {} }
+    this.timers = [];
     if (this.tools && typeof this.tools.clearPluginTools === 'function') this.tools.clearPluginTools();
     this.loaded = {};
     const enabled = this.enabledList();
@@ -204,6 +218,36 @@ class PluginHost {
           if (!self.store) return [];
           return self.store.active().filter((x) => String(x.text || '').indexOf(String(q || '')) >= 0).slice(0, topK || 5);
         }
+      },
+      // 自己开口：想他了她就自己说一句。say 会走主程序的人设和记忆，
+      // 说完写进会话历史（桌面窗口能看到）；target='qq' 时再从网关发一份出去。
+      proactive: {
+        say: async (o) => {
+          need('proactive');
+          o = o || {};
+          if (typeof self.speakUp !== 'function') throw new Error('主程序没提供「自己开口」的能力');
+          const r = await self.speakUp(String(o.sessionId || 'desktop'), o);
+          if (r && r.spoke && String(o.target || '') === 'qq' && typeof self.sendQQ === 'function') {
+            try {
+              const sent = await self.sendQQ(r.reply);
+              if (sent && sent.ok === false) r.qqError = String(sent.error || '发不出去');
+            } catch (e) { r.qqError = e.message; }
+          }
+          return r;
+        },
+        idleMinutes: (sid) => (typeof self.idleMinutes === 'function' ? self.idleMinutes(String(sid || 'desktop')) : -1)
+      },
+      // 插件自己的定时器：重载插件时会被自动清掉，别自己裸写 setInterval
+      tick: (fn, ms) => {
+        need('proactive');
+        if (typeof fn !== 'function') throw new Error('tick 第一个参数要是函数');
+        const iv = setInterval(() => {
+          try { Promise.resolve(fn()).catch((e) => self.log('定时任务出错', { plugin: m.name, msg: e.message })); }
+          catch (e) { self.log('定时任务出错', { plugin: m.name, msg: e.message }); }
+        }, Math.max(5000, Number(ms) || 60000));
+        if (iv.unref) iv.unref();
+        self.timers.push(iv);
+        return iv;
       }
     };
     // 界面按钮：插件自己挂一个 ui 对象（ui.label + ui.run），这里只做校验
@@ -274,4 +318,4 @@ function copyDir(src, dest) {
   }
 }
 
-module.exports = { PluginHost, pluginsDir, readManifest, PERMISSIONS, NAME_RE };
+module.exports = { PluginHost, pluginsDir, readManifest, copyDir, PERMISSIONS, NAME_RE };
