@@ -24,6 +24,7 @@ const { consolidate } = require('./memory/consolidate');
 const { Tools } = require('./tools');
 const { PluginHost } = require('./plugins');
 const { referenceGate } = require('./gates');
+const { AnswerCache } = require('./cache');
 const { McpClient } = require('./mcp-client');
 const safety = require('./safety');
 const sandbox = require('./sandbox');
@@ -159,6 +160,8 @@ class Her {
     // 记忆契约门面：内部默认指向上面这份；外部可以 setMemory() 整个换掉，
     // 只要求 remember / search / forget 三个动作（2.0 · M1）。
     this.memory = this.store;
+    // 答案缓存（2.0 · 节省第一层）：同一句话问第二遍不再花钱
+    this.cache = new AnswerCache(this.dataDir);
     this.people = new People(path.join(this.dataDir, 'memory'));
     this.events = new EventLayer(path.join(this.dataDir, 'memory'), { windowDays: (this.cfg.memory && this.cfg.memory.eventWindowDays) || 7 });
     this.router = new Router(this.cfg, this.dataDir);
@@ -695,6 +698,23 @@ class Her {
     }
 
     this._curSession = sessionId;
+
+    // 缓存（2.0 · 节省第一层）：同一个问法问第二遍，不再花一次钱。
+    // 只认「去掉标点空格后完全一样」的，宁可少命中也不给错答案。
+    const cacheOn = !process.env.JQ_NO_CACHE && !(this.cfg.cache && this.cfg.cache.enabled === false);
+    if (cacheOn && text && !images.length && !attachBlock && mode === 'chat') {
+      try {
+        const hit = this.cache.get(text);
+        if (hit) {
+          const h0 = this.loadHistory(sessionId);
+          h0.messages.push({ role: 'user', content: text }, { role: 'assistant', content: hit.reply });
+          this.saveHistory(sessionId, h0);
+          appendJsonl(path.join(this.dataDir, 'turns.log'), { ts: nowIso(), session: sessionId, text: truncate(text, 200), cached: true });
+          return { reply: hit.reply, stats: { cached: true, provider: 'cache', steps: 0, ms: 0, tools: [], tokens: 0, cost: 0 }, memory: [], trace: [] };
+        }
+      } catch (e) { /* 缓存坏了不影响正常聊 */ }
+    }
+
     let history = this.loadHistory(sessionId);
     try { history = await this.rollSummary(history, sessionId); } catch (e) {}
     const recallRes = await this.recallBlock(text);
@@ -944,6 +964,11 @@ class Her {
         stats.reference_flags = g.flagged;
       }
     } catch (e) {}
+
+    // 干净的回答才进缓存：用了工具的（有副作用）、被引用闸标记的（她自己都拿不准）、太长的都不要
+    if (cacheOn && text && mode === 'chat' && !images.length && !attachBlock) {
+      try { this.cache.set(text, reply, { usedTools: usedTools, flagged: stats.reference_flags || [] , provider: provider }); } catch (e) {}
+    }
 
     appendJsonl(path.join(this.dataDir, 'turns.log'), Object.assign({ ts: nowIso(), session: sessionId, text: truncate(text, 200) }, stats));
     return { reply, stats, memory: recallRes.hits, trace };

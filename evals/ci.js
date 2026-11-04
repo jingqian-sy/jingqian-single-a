@@ -23,6 +23,8 @@ const { spawnSync } = require('child_process');
 const { start: startMock } = require('./mock-provider');
 
 const ROOT = path.join(__dirname, '..');
+// CI 里关掉答案缓存：很多用例要求「这次真的调了模型」，缓存会让同一句话第二次直接返回旧的
+process.env.JQ_NO_CACHE = '1';
 const CI_DATA = 'data/ci-run';
 const CI_CONFIG = 'config.ci.json';
 const MOCK_PORT = 18000 + (process.pid % 900); // 用 pid 派生端口，避免上次残留进程占着 18099 把 CI 卡死

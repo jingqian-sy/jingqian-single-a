@@ -77,6 +77,10 @@
   },
   "privacyDirs": [],
   "privacyDirsNote": "不想出本机的目录（绝对路径）。autoTier 开着时，话里点到这些路径就一定走本地模型。",
+  "cache": {
+    "enabled": true
+  },
+  "cacheNote": "答案缓存：同一句话问第二遍不再调模型，直接把上次的回答还给你（只认去掉标点空格后完全一样的，带工具的回答不进缓存）。不想要就设 enabled=false。",
   "quotaSources": [
     {
       "provider": "zhipu",
