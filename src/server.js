@@ -329,6 +329,7 @@ async function handleApi(req, res, url) {
     if (body.mode !== undefined) nextRoute.mode = String(body.mode);
     if (Array.isArray(body.order)) nextRoute.order = body.order.map(String);
     if (typeof body.escalate === 'boolean') nextRoute.escalate = body.escalate;
+    if (typeof body.autoTier === 'boolean') nextRoute.autoTier = body.autoTier;
     if (typeof body.pin === 'string' && body.pin) {
       nextRoute.mode = 'fixed';
       nextRoute.order = [body.pin].concat((nextRoute.order || []).filter((n) => n !== body.pin));
@@ -339,7 +340,7 @@ async function handleApi(req, res, url) {
     const names = her.router.providers.map((x) => x.name);
     const bad = (nextRoute.order || []).filter((n) => names.indexOf(n) < 0);
     if (bad.length) return json(res, 400, { ok: false, error: '不认识的提供方：' + bad.join('、') });
-    cur.route = Object.assign({}, cur.route, { mode: nextRoute.mode, order: nextRoute.order, escalate: nextRoute.escalate !== false });
+    cur.route = Object.assign({}, cur.route, { mode: nextRoute.mode, order: nextRoute.order, escalate: nextRoute.escalate !== false, autoTier: !!nextRoute.autoTier });
     try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cur, null, 2), 'utf8'); }
     catch (e) { return json(res, 500, { ok: false, error: '写 config.json 失败：' + e.message }); }
     her.router.setRoute(cur.route);

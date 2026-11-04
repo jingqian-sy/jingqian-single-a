@@ -71,8 +71,12 @@
       "ollama-8b"
     ],
     "escalate": true,
+    "autoTier": false,
+    "autoTierNote": "开着之后按任务分档：点题了 privacyDirs 里目录的一律只走本机，寒暄和短问题走便宜的，写代码/重构/调试这类才上云端。默认关，关着就是上面 mode 那套老逻辑。",
     "maxSteps": 20
   },
+  "privacyDirs": [],
+  "privacyDirsNote": "不想出本机的目录（绝对路径）。autoTier 开着时，话里点到这些路径就一定走本地模型。",
   "quotaSources": [
     {
       "provider": "zhipu",

@@ -19,6 +19,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { classifyTier, allowedByTier } = require('./route-classify');
 const { readJson, writeJson, appendJsonl, ensureDir, tokenCount } = require('./util');
 const quota = require('./quota');
 
@@ -106,6 +107,7 @@ class Router {
     if (typeof p.mode === 'string' && ['cheap-first', 'cloud-first', 'fixed'].indexOf(p.mode) >= 0) next.mode = p.mode;
     if (Array.isArray(p.order)) next.order = p.order.map(String);
     if (typeof p.escalate === 'boolean') next.escalate = p.escalate;
+    if (typeof p.autoTier === 'boolean') next.autoTier = p.autoTier;
     if (typeof p.pin === 'string' && p.pin) {
       const rest = (this.route.order || []).filter((n) => n !== p.pin);
       next.mode = 'fixed';
@@ -138,7 +140,7 @@ class Router {
       mode: (this.cfg && this.cfg.modes && (this.cfg.modes.desktop === 'chat' || this.cfg.modes.desktop === 'work'))
         ? this.cfg.modes.desktop
         : (this.cfg && this.cfg.mode === 'chat' ? 'chat' : 'work'),
-      route: { mode: this.route.mode || 'cheap-first', order: this.route.order || [], escalate: this.route.escalate !== false },
+      route: { mode: this.route.mode || 'cheap-first', order: this.route.order || [], escalate: this.route.escalate !== false, autoTier: !!this.route.autoTier },
       providers: this.providerInfo(),
       last: this.last,
       quota: quotaInfo
@@ -160,6 +162,15 @@ class Router {
     // 这一轮要用工具：声明了 tools:false 的家不硬塞（塞了它会答非所问或直接 400）
     if (opts.needTools) list = list.filter((p) => p.tools !== false);
     if (opts.skipLocal) list = list.filter((p) => p.tier !== 'local');
+    // 分档（2.0）：route.autoTier=true 才启用，默认一点不改变原有行为。
+    // 隐私目录永远不出机器；轻活走便宜的；硬活才上云端。
+    let tier = 'auto';
+    if (this.route.autoTier) {
+      tier = classifyTier(this.cfg, taskText, opts);
+      const narrowed = allowedByTier(tier, list);
+      if (narrowed.length) list = narrowed;
+      try { this.routeLog('分档', { tier: tier, task: String(taskText || '').slice(0, 40) }); } catch (e) {}
+    }
     if (!list.length) return [];
     const mode = this.route.mode || 'cheap-first';
     const price = (p) => (Number(p.price_in) || 0) * 1 + (Number(p.price_out) || 0);
@@ -174,7 +185,7 @@ class Router {
     }
     // 升级只在「自动先免费/本地」时做。fix 是用户亲手点的那一家，别自作主张改；
     // 「先云端」本来就在云端，也不需要再升。
-    const hard = mode === 'cheap-first' && this.route.escalate !== false && (
+    const hard = tier === 'auto' && mode === 'cheap-first' && this.route.escalate !== false && (
       String(taskText || '').length > 220 ||
       Number(opts.contextChars || 0) > 12000 ||
       HARD_WORDS.test(String(taskText || ''))
