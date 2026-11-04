@@ -81,4 +81,23 @@ function recommend(e) {
   return { name: '省心', reason: '条件有限，先用最稳的一套', route: { mode: 'cloud-first', autoTier: false } };
 }
 
-module.exports = { probe, recommend, detectGpu, detectLocalModel };
+// 换机自检：拿她的记忆逐条核，看里面提到的路径在这台机器上还成不成立。
+// 换电脑之后最常见的问题不是她不会说话，而是她嘴里那些路径还是上一台机器的。
+function scanMemoryPaths(store) {
+  const fs = require('fs');
+  const { absPaths } = require('./gates');
+  if (!store || typeof store.active !== 'function') return { checked: 0, missing: [], missingCount: 0 };
+  let checked = 0;
+  const missing = [];
+  for (const it of store.active()) {
+    for (const p of absPaths(it.text)) {
+      checked++;
+      let ok = false;
+      try { ok = fs.existsSync(p); } catch (e) { ok = false; }
+      if (!ok) missing.push({ id: it.id, text: String(it.text || '').slice(0, 80), path: p });
+    }
+  }
+  return { checked: checked, missingCount: missing.length, missing: missing.slice(0, 50) };
+}
+
+module.exports = { probe, recommend, detectGpu, detectLocalModel, scanMemoryPaths };

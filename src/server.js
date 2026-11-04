@@ -300,8 +300,12 @@ async function handleApi(req, res, url) {
   // 这台机器能跑什么（2.0 · 泛用）：显卡、内存、有没有本地模型、配了几个云端 key
   if (p === '/api/env') {
     if (!isLocal(req)) return denyRemote(res);
-    try { return json(res, 200, Object.assign({ ok: true }, envProbe.probe(cfg))); }
-    catch (e) { return json(res, 500, { ok: false, error: e.message }); }
+    try {
+      const info = envProbe.probe(cfg);
+      // 换机自检：她记忆里提到的路径，在这台机器上还成不成立
+      try { info.memoryPaths = envProbe.scanMemoryPaths(her.store); } catch (e) { info.memoryPaths = null; }
+      return json(res, 200, Object.assign({ ok: true }, info));
+    } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
   }
 
   // 应用某套预设：把 route 写回配置（用户点一下才动，不自动改）
