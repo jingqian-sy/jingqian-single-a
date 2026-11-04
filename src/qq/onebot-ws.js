@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 /*
  * OneBot WS 直连（它讲 OneBot v11 WebSocket，不是 HTTP 回调）
  *
@@ -27,6 +27,32 @@ class OneBotWsBridge {
     this.retry = 0;
     this.timer = null;
     this.lastNote = '';
+    this.seq = 0;
+    this.waiters = new Map();
+  }
+
+  /*
+   * 通过 WS 直接调 OneBot 动作（send_private_msg 等）。
+   * 这样只需要一个 WS 令牌就够了——不用再去猜网关 HTTP 那边的另一个 accessToken。
+   * OneBot v11 的 WS 是双工的：发 {action, params, echo}，回包里带同一个 echo。
+   */
+  call(action, params, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== 1) return reject(new Error('WS 没连上'));
+      const echo = 'jq-' + Date.now() + '-' + (++this.seq);
+      const timer = setTimeout(() => {
+        this.waiters.delete(echo);
+        reject(new Error('WS 调用超时：' + action));
+      }, timeoutMs || 10000);
+      this.waiters.set(echo, { resolve, reject, timer });
+      try {
+        this.ws.send(JSON.stringify({ action: action, params: params || {}, echo: echo }));
+      } catch (e) {
+        clearTimeout(timer);
+        this.waiters.delete(echo);
+        reject(e);
+      }
+    });
   }
 
   log(o) {
@@ -54,6 +80,15 @@ class OneBotWsBridge {
     ws.addEventListener('message', (ev) => {
       let data = null;
       try { data = JSON.parse(String(ev.data)); } catch (e) { return; }
+      // 这是刚才 call() 发出去的动作回包，按 echo 对上
+      if (data && data.echo && this.waiters.has(String(data.echo))) {
+        const w = this.waiters.get(String(data.echo));
+        this.waiters.delete(String(data.echo));
+        clearTimeout(w.timer);
+        if (data.retcode !== undefined && data.retcode !== 0) w.reject(new Error('OneBot 动作失败 retcode=' + data.retcode));
+        else w.resolve(data);
+        return;
+      }
       // 只管消息事件；自己发的、心跳之类直接放过
       if (!data || data.post_type !== 'message') return;
       this.log({

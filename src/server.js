@@ -71,7 +71,7 @@ try {
         try {
           const d = await qq.incoming({ cfg, her, dataDir: her.dataDir, ev });
           if (d && d.ok && d.reply) {
-            await qq.send({ cfg, dataDir: her.dataDir, to: d.peer, text: d.reply, group: d.kind === 'group' });
+            await qq.send({ cfg, dataDir: her.dataDir, to: d.peer, text: d.reply, group: d.kind === 'group', bridge: snowluma });
           }
         } catch (e) { /* 单条失败不影响连接 */ }
       }
@@ -508,7 +508,7 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     if (!body.text || !body.to) return json(res, 400, { ok: false, error: '缺 to / text' });
     try {
-      const r = await qq.send({ cfg, dataDir: her.dataDir, to: body.to, text: body.text, group: !!body.group });
+      const r = await qq.send({ cfg, dataDir: her.dataDir, to: body.to, text: body.text, group: !!body.group, bridge: snowluma });
       return json(res, 200, r);
     } catch (e) {
       return json(res, 200, { ok: false, error: e.message });

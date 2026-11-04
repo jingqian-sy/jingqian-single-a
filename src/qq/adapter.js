@@ -23,8 +23,12 @@ function readCfg(cfg) {
   const q = (cfg && cfg.qq) || {};
   return {
     enabled: !!q.enabled,
-    gateway: String(q.gateway || '').replace(/\/+$/, ''),
+    // 发消息走 HTTP：优先 httpUrl，老配置只有 gateway 就用它
+    gateway: String(q.httpUrl || q.gateway || '').replace(/\/+$/, ''),
     token: String(q.token || q.accessToken || ''),
+    // SnowLuma 这类网关的 HTTP 和 WS 是两个不同的 accessToken：
+    // 收消息用 WS 那个，发消息得用 HTTP 那个，不然会 401
+    httpToken: String(q.httpAccessToken || ''),
     allow: (q.allow || []).map(String),
     groups: (q.groups || []).map(String),
     selfId: String(q.self_id || q.selfId || '')
@@ -91,17 +95,32 @@ async function incoming(opts) {
 }
 
 async function send(opts) {
-  const { cfg, dataDir, to, text, group } = opts;
+  const { cfg, dataDir, to, text, group, bridge } = opts;
   const q = readCfg(cfg);
   if (!q.enabled) return { ok: false, error: 'qq disabled（默认关）' };
-  if (!q.gateway) return { ok: false, error: '没配 qq.gateway' };
   const isGroup = !!group;
+  // 有 WS 桥就从 WS 发：OneBot v11 的 WS 是双工的，发消息不用另配一个 HTTP 令牌，
+  // 用户只要填对 WS 那个就行（SnowLuma 的两个 accessToken 是这个坑的根源）。
+  if (bridge && typeof bridge.call === 'function') {
+    try {
+      const act = isGroup ? 'send_group_msg' : 'send_private_msg';
+      const params = isGroup ? { group_id: Number(to), message: String(text) } : { user_id: Number(to), message: String(text) };
+      const r = await bridge.call(act, params);
+      logLine(dataDir, { dir: 'out', ok: true, via: 'ws', kind: isGroup ? 'group' : 'private', peer: String(to), len: String(text).length, digest: truncate(String(text), 40) });
+      return { ok: true, via: 'ws', status: 200, result: r };
+    } catch (e) {
+      logLine(dataDir, { dir: 'out', ok: false, via: 'ws', error: e.message });
+      // WS 发不出去就往下走 HTTP 再试一次
+    }
+  }
+  if (!q.gateway) return { ok: false, error: '没配 qq.gateway' };
   const url = q.gateway + (isGroup ? '/send_group_msg' : '/send_private_msg');
   const body = isGroup ? { group_id: Number(to), message: String(text) } : { user_id: Number(to), message: String(text) };
   try {
+    const sendToken = q.httpToken || q.token;
     const r = await fetch(url, {
       method: 'POST',
-      headers: Object.assign({ 'content-type': 'application/json' }, q.token ? { authorization: 'Bearer ' + q.token } : {}),
+      headers: Object.assign({ 'content-type': 'application/json' }, sendToken ? { authorization: 'Bearer ' + sendToken } : {}),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(10000)
     });

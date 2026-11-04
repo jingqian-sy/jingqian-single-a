@@ -14,10 +14,14 @@ $zip = Join-Path $OutRoot ($name + '.zip')
 
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Path $out -Force | Out-Null
-foreach ($d in @('src', 'public', 'desktop', 'docs', 'plugins-example')) {
+foreach ($d in @('src', 'public', 'docs', 'plugins-example')) {
   $from = Join-Path $repo $d
   if (Test-Path $from) { robocopy $from (Join-Path $out $d) /E /NFL /NDL /NJH /NJS /NP /XD data .run .tmp | Out-Null }
 }
+# desktop 只带跑起来要用的：exe + 图标。
+# 源码(Shell.cs)、自检截图(_verify-*.png)、本机状态文件(tutorial-seen / ui-window)、编译脚本都不进包。
+robocopy (Join-Path $repo 'desktop') (Join-Path $out 'desktop') /E /NFL /NDL /NJH /NJS /NP `
+  /XF 'Shell.cs' '_verify-*.png' 'tutorial-seen.txt' 'ui-window.txt' 'build-desktop.cmd' '*.pdb' | Out-Null
 foreach ($f in @('package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'config.example.json', '启动鲸倩.cmd', '创建桌面快捷方式.cmd')) {
   $p = Join-Path $repo $f
   if (Test-Path $p) { Copy-Item $p (Join-Path $out $f) -Force }

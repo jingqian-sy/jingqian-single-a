@@ -1108,6 +1108,18 @@ namespace JingqianShell
             Shown += delegate
             {
                 ApplyRound();
+                // 启动第一帧控件可能还没画完（圆角裁剪 + 异步起服务之后尤其明显），
+                // 这里补一次整体重绘，避免按钮出现"透明一片"的闪帧。
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (IsDisposed || !IsHandleCreated) return;
+                        Invalidate(true);
+                        Update();
+                    });
+                }
+                catch { }
                 StartServiceAsync(delegate (bool ok)
                 {
                     SetOnline(ok);
@@ -2789,11 +2801,11 @@ namespace JingqianShell
         readonly string repoRoot;
         TextBox txtUrl, txtPort, txtBase, txtModel, txtKey;
         ComboBox cmbTier, cmbSandbox;
-        TextBox txtWhitelist, txtQQUrl, txtQQToken;
+        TextBox txtWhitelist, txtQQUrl, txtQQToken, txtQQAllow;
         ComboBox cmbQQKind;
         CheckBox chkQQDryRun, chkQQEnable;
         CheckBox chkMemory, chkShowKey;
-        Button btnQQFind, btnQQLink, btnQQUnlink, btnAdd, btnDel;
+        Button btnQQFind, btnQQLink, btnQQUnlink, btnQQStart, btnAdd, btnDel;
         FlatBtn btnApplyKey;
         Label lblQQStatus;
         Panel headerPanel, contentPanel, footerPanel;
@@ -3124,8 +3136,13 @@ namespace JingqianShell
             lblQQStatus.Text = "QQ：未检测";
             lblQQStatus.ForeColor = Theme.Dim;
             lblQQStatus.Font = Theme.Ui(9f, false);
-            lblQQStatus.SetBounds(Dpi.X(176), Dpi.X(694), Dpi.X(270), Dpi.X(26));
+            lblQQStatus.SetBounds(Dpi.X(176), Dpi.X(694), Dpi.X(150), Dpi.X(26));
             contentPanel.Controls.Add(lblQQStatus);
+
+            // 配置好之后的一键拉起：点一下把本机已经装好的网关开起来（不去装、不去改它）
+            btnQQStart = SmallBtn("启动网关", 330, 690, 90, false);
+            btnQQStart.AccessibleName = "cfgQQStart";
+            btnQQStart.Click += delegate { QQStartGateway(); };
 
             btnQQLink = SmallBtn("连接", 452, 690, 70, false);
             btnQQLink.AccessibleName = "cfgQQLink";
@@ -3137,7 +3154,7 @@ namespace JingqianShell
             btnQQUnlink.Enabled = false;
             btnQQUnlink.Click += delegate { QQDisconnect(); };
 
-            Cap("网关地址（HTTP 或 WS）", 14, 730);
+            Cap("网关地址（WS 直连填 ws://127.0.0.1:3001；HTTP 推送填 http://127.0.0.1:3000）", 14, 730);
             txtQQUrl = Box(14, 750, 380);
             txtQQUrl.AccessibleName = "cfgQQUrl";
             Cap("接入方式", 408, 730);
@@ -3147,7 +3164,8 @@ namespace JingqianShell
             cmbQQKind.SetBounds(Dpi.X(408), Dpi.X(750), Dpi.X(202), Dpi.X(26));
             cmbQQKind.Items.Add("HTTP 推送");
             cmbQQKind.Items.Add("WS 直连");
-            cmbQQKind.SelectedIndex = 0;
+            // 默认 WS：SnowLuma 这类网关走 WS 只需要一个令牌，收和发都从这条走
+            cmbQQKind.SelectedIndex = 1;
             cmbQQKind.AccessibleName = "cfgQQKind";
             contentPanel.Controls.Add(cmbQQKind);
             Cap("令牌", 14, 784);
@@ -3169,6 +3187,10 @@ namespace JingqianShell
             chkQQEnable.SetBounds(Dpi.X(408), Dpi.X(784), Dpi.X(160), Dpi.X(20));
             chkQQEnable.AccessibleName = "cfgQQEnable";
             contentPanel.Controls.Add(chkQQEnable);
+            // 白名单：不填就等于谁发消息都不理，这是接 QQ 最容易漏的一步，放在界面上
+            Cap("允许私聊的QQ号（逗号分隔，填你自己的主号）", 408, 826);
+            txtQQAllow = Box(408, 846, 202);
+            txtQQAllow.AccessibleName = "cfgQQAllow";
 
             // 提示收在下面一行，别占太多地方
             Hint("网关地址就是它的 HTTP 地址（如 http://127.0.0.1:5700）或 WS 地址（如 ws://127.0.0.1:3001）；令牌两边通用。", 14, 834);
@@ -3733,6 +3755,7 @@ namespace JingqianShell
                 qqToken = "";
                 qqNickname = "";
                 string qqKind = "onebot-http", qqWsUrl = "", qqAccessToken = "";
+                string qqAllowText = "";
                 bool qqDryRun = true;
                 if (cfg.TryGetValue("qq", out sub) && sub is Dictionary<string, object>)
                 {
@@ -3744,6 +3767,12 @@ namespace JingqianShell
                     qqWsUrl = qd.ContainsKey("wsUrl") ? Convert.ToString(qd["wsUrl"]) : "";
                     qqAccessToken = qd.ContainsKey("accessToken") ? Convert.ToString(qd["accessToken"]) : "";
                     qqDryRun = !qd.ContainsKey("dryRun") || Convert.ToBoolean(qd["dryRun"]);
+                    if (qd.ContainsKey("allow") && qd["allow"] is object[])
+                    {
+                        List<string> al = new List<string>();
+                        foreach (object o in (object[])qd["allow"]) al.Add(Convert.ToString(o));
+                        qqAllowText = string.Join(",", al.ToArray());
+                    }
                 }
                 else if (cfg.TryGetValue("qqBridge", out sub) && sub is Dictionary<string, object>)
                 {
@@ -3761,6 +3790,7 @@ namespace JingqianShell
                 txtQQToken.Text = qqAccessToken.Length > 0 ? qqAccessToken : qqToken;
                 if (chkQQDryRun != null) chkQQDryRun.Checked = qqDryRun;
                 if (chkQQEnable != null) chkQQEnable.Checked = qqConnected;
+                if (txtQQAllow != null) txtQQAllow.Text = qqAllowText;
                 UpdateQQState();
                 txtPersona.Text = cfg.ContainsKey("persona") ? Convert.ToString(cfg["persona"]) : "";
                 UpdatePersonaCount();
@@ -4101,6 +4131,44 @@ namespace JingqianShell
             lblPersonaCount.ForeColor = Theme.Warn;
         }
 
+        // 一键拉起本机已经装好的 OneBot 网关（SnowLuma 这类）。
+        // 只启动用户自己装的那份，不下载、不安装、不改它的配置——装和授权都归用户自己。
+        void QQStartGateway()
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string[] cands = new string[]
+            {
+                Path.Combine(home, "SnowLuma"),
+                @"D:\SnowLuma",
+                Path.Combine(home, "Desktop", "SnowLuma"),
+                Path.Combine(home, "Downloads", "SnowLuma"),
+                Path.Combine(home, "Documents", "SnowLuma")
+            };
+            foreach (string d in cands)
+            {
+                string idx = Path.Combine(d, "index.mjs");
+                string node = Path.Combine(d, "node.exe");
+                if (!File.Exists(idx) || !File.Exists(node)) continue;
+                try
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo(node, "index.mjs");
+                    psi.WorkingDirectory = d;
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    Process.Start(psi);
+                    lblQQStatus.Text = "网关启动中…等十来秒再点「自动找」";
+                    lblQQStatus.ForeColor = Theme.Dim;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "启动网关失败：" + ex.Message, "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                return;
+            }
+            MessageBox.Show(this, "没在本机找到 QQ 网关。\n\n它得先装一个（SnowLuma 之类），装好后再点这个按钮。\n地址在「上手」教程第四步里。",
+                "鲸倩", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
         void QQFind()
         {
             btnQQFind.Enabled = false;
@@ -4269,18 +4337,33 @@ namespace JingqianShell
                 fb["events"] = chkEventsFeature.Checked;
                 body["features"] = fb;
                 Dictionary<string, object> qb = new Dictionary<string, object>();
-                bool qqUseWs = cmbQQKind != null && cmbQQKind.SelectedIndex == 1;
-                qb["enabled"] = chkQQEnable != null ? chkQQEnable.Checked : qqConnected;
-                qb["kind"] = qqUseWs ? "onebot-ws" : "onebot-http";
                 string qqAddr = txtQQUrl.Text.Trim();
                 string qqTok = txtQQToken.Text.Trim();
-                qb["gateway"] = qqAddr;
-                qb["httpUrl"] = qqAddr;
-                qb["wsUrl"] = qqAddr;
+                // 地址是 ws:// 开头就按 WS 直连存，别管下拉选的是啥——
+                // 否则会出现「地址填了 ws、方式是 HTTP」，接上也不通
+                bool addrIsWs = qqAddr.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)
+                             || qqAddr.StartsWith("wss://", StringComparison.OrdinalIgnoreCase);
+                bool qqUseWs = addrIsWs || (cmbQQKind != null && cmbQQKind.SelectedIndex == 1);
+                qb["enabled"] = chkQQEnable != null ? chkQQEnable.Checked : qqConnected;
+                qb["kind"] = qqUseWs ? "onebot-ws" : "onebot-http";
+                qb["gateway"] = qqUseWs ? "" : qqAddr;
+                qb["httpUrl"] = qqUseWs ? "" : qqAddr;
+                qb["wsUrl"] = qqUseWs ? qqAddr : "";
                 qb["accessToken"] = qqTok;
                 qb["dryRun"] = chkQQDryRun == null || chkQQDryRun.Checked;
                 qb["token"] = txtQQToken.Text.Length > 0 ? txtQQToken.Text : qqToken;
                 qb["url"] = txtQQUrl.Text.Trim();
+                // 白名单：空着就等于谁都不理，所以要真的写进去
+                List<object> allowList = new List<object>();
+                if (txtQQAllow != null)
+                {
+                    foreach (string one in txtQQAllow.Text.Split(','))
+                    {
+                        string t1 = one.Trim();
+                        if (t1.Length > 0) allowList.Add(t1);
+                    }
+                }
+                qb["allow"] = allowList.ToArray();
                 body["qq"] = qb;
                 body["qqBridge"] = qb;
                 bool ok = api.SaveConfig(body);
@@ -4651,6 +4734,10 @@ namespace JingqianShell
         public static extern bool ShowWindow(IntPtr hWnd, int cmd);
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
         public static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        public static extern bool IsIconic(IntPtr hWnd);
     }
 
     // ===================== 入口 =====================
@@ -5041,6 +5128,26 @@ namespace JingqianShell
             return 0;
         }
 
+        // 单实例：已经开着一个窗口时，把那个拉到前面，新进程直接退出。
+        // 找不到窗口也别硬拦（可能是上次崩了留下的锁），让新的照常开。
+        static void ActivateExistingWindow()
+        {
+            try
+            {
+                string exeName = Path.GetFileNameWithoutExtension(Application.ExecutablePath);
+                foreach (Process p in Process.GetProcessesByName(exeName))
+                {
+                    IntPtr h = p.MainWindowHandle;
+                    if (h == IntPtr.Zero) continue;
+                    if (Native.IsIconic(h)) Native.ShowWindow(h, 9);   // SW_RESTORE
+                    Native.ShowWindow(h, 5);                            // SW_SHOW
+                    Native.SetForegroundWindow(h);
+                    return;
+                }
+            }
+            catch { }
+        }
+
         [STAThread]
         static int Main(string[] args)
         {
@@ -5118,6 +5225,22 @@ namespace JingqianShell
                 return 0;
             }
 
+            // 单实例：正常开窗口时只允许一个，再点就把已有的拉起来。
+            // 自检/截图/自发送这些模式允许并存，不然 CI 和自检会互相挡。
+            bool singleUi = mode == "ui" && sendText == null && shotPath == null && !settings && !onScreen;
+            Mutex instanceLock = null;
+            if (singleUi)
+            {
+                bool created = false;
+                try { instanceLock = new Mutex(true, @"Local\Jingqian.Desktop.SingleInstance", out created); }
+                catch { created = true; }
+                if (!created)
+                {
+                    ActivateExistingWindow();
+                    return 0;
+                }
+            }
+
             using (MainForm f = new MainForm(repo, baseUrl, settings))
             {
                 f.AutoSendText = sendText;
@@ -5151,6 +5274,7 @@ namespace JingqianShell
                     f.ShowInTaskbar = false;
                 }
                 Application.Run(f);
+                if (instanceLock != null) { try { instanceLock.ReleaseMutex(); } catch { } instanceLock.Dispose(); instanceLock = null; }
                 if (mode == "dump") return f.DumpCount > 0 ? 0 : 2;
             }
             return 0;
@@ -5200,8 +5324,10 @@ namespace JingqianShell
                 + "四、进阶\n"
                 + "文件、图片直接拖进窗口；工具栏「记忆」能搜/删记忆；「插件」可以装小功能；\n"
                 + "「朗读」让它念出来，输入框右边「说话」可以语音输入。\n"
-                + "想接 QQ：设置 → QQ 一键连接，选「HTTP 推送」（NapCat/LLOneBot）或「WS 直连」（SnowLuma 等），\n"
-                + "先勾「只记录」验通，再关掉它才会自动回复。\n\n"
+                + "想接 QQ：鲸倩自己不登 QQ，得先装一个 OneBot 网关（SnowLuma / NapCat / LLOneBot 都行）。\n"
+                + "SnowLuma 绿色包：https://github.com/SnowLuma/SnowLuma/releases  （解压双击启动，扫码登录小号）\n"
+                + "装好回来：设置 → QQ 一键连接 → 点「自动找 QQ 桥接」→ 找到就点「连接」。\n"
+                + "别忘了把「先只记录，不自动回复」的勾去掉，它才会真的回。\n\n"
                 + "出问题先看这两处：消息区的灰色小条（做了什么）、工具栏「状态」（服务还在不在）。";
 
             TextBox text = new TextBox();

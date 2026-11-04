@@ -32,6 +32,53 @@ function logLine(dataDir, entry) {
   try { appendJsonl(path.join(dataDir, 'qq.log'), Object.assign({ ts: nowIso() }, entry)); } catch (e) {}
 }
 
+/*
+ * 只读本机网关自己的配置，把端口和 accessToken 捞出来。
+ * SnowLuma 的 OneBot 配置是按账号命名的（onebot_<uin>.json），
+ * 而且 HTTP 和 WS 是两个不同的 token —— 收消息要用 WS 那个、发消息要用 HTTP 那个，
+ * 让用户自己抄根本分不清，所以这里直接按 role 分好。
+ * 只读不写，读不到就算了。
+ */
+function localGatewaySecrets() {
+  const out = [];
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  if (!home) return out;
+  const dirs = [
+    path.join(home, 'SnowLuma', 'config'),
+    path.join(home, 'snowluma', 'config'),
+    path.join(home, 'AppData', 'Local', 'SnowLuma', 'config'),
+    // 常见的「我把它解压到 D 盘/别处」的位置
+    'D:\\SnowLuma\\config',
+    'D:\\snowluma\\config',
+    'C:\\SnowLuma\\config'
+  ];
+  // 大多数人不会乖乖放在用户目录，直接解压到桌面/下载里——
+  // 往这两处再探一层，能找到就不用手抄令牌了
+  for (const base of ['Desktop', 'Downloads', 'Documents']) {
+    let subs = [];
+    try { subs = fs.readdirSync(path.join(home, base)); } catch (e) { continue; }
+    for (const sub of subs) {
+      dirs.push(path.join(home, base, sub, 'config'));
+      dirs.push(path.join(home, base, sub, 'SnowLuma', 'config'));
+    }
+  }
+  for (const dir of dirs) {
+    let files = [];
+    try { files = fs.readdirSync(dir).filter((f) => /^onebot.*\.json$/i.test(f)); } catch (e) { continue; }
+    for (const f of files) {
+      try {
+        const j = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+        const nets = (j && j.networks) || {};
+        const http = (nets.httpServers || [])[0];
+        const ws = (nets.wsServers || [])[0];
+        if (http && http.port) out.push({ role: 'http', port: Number(http.port), token: String(http.accessToken || '') });
+        if (ws && ws.port) out.push({ role: 'ws', port: Number(ws.port), token: String(ws.accessToken || '') });
+      } catch (e) { /* 坏文件跳过 */ }
+    }
+  }
+  return out;
+}
+
 function mask(t) {
   t = String(t || '');
   if (!t) return '';
@@ -65,8 +112,11 @@ function writeQQ(cfgFile, mutate) {
 
 async function discover(cfg, dataDir) {
   const q = readCfg(cfg);
+  const locals = localGatewaySecrets();
   const tokens = [];
   if (q.token) tokens.push(q.token);
+  // 本机网关配置里的令牌（SnowLuma 等），解决「新人有网关但没令牌」的 401
+  for (const l of locals) if (tokens.indexOf(l.token) < 0) tokens.push(l.token);
   tokens.push('');
   // 上次连通过的那一个先试：一次连通之后就不用每次全扫一遍
   const last = readLast(dataDir);
@@ -76,7 +126,10 @@ async function discover(cfg, dataDir) {
     if (m) ports.push(Number(m[1]));
     if (last.token && tokens.indexOf(last.token) < 0) tokens.unshift(last.token);
   }
+  // 本机网关配置里写着的端口也优先试
+  for (const l of locals) if (ports.indexOf(l.port) < 0) ports.push(l.port);
   for (const p of CANDIDATES) if (ports.indexOf(p) < 0) ports.push(p);
+  const sawUnauthorized = [];
   for (const port of ports) {
     const gw = 'http://127.0.0.1:' + port;
     for (const tk of tokens) {
@@ -89,9 +142,22 @@ async function discover(cfg, dataDir) {
           selfId: r.selfId, nickname: r.nickname || 'QQ 桥接'
         };
       }
+      if (String(r.reason || '').indexOf('401') >= 0) sawUnauthorized.push(gw);
     }
   }
-  logLine(dataDir, { dir: 'discover', ok: false, reason: 'not found' });
+  logLine(dataDir, { dir: 'discover', ok: false, reason: sawUnauthorized.length ? 'need token' : 'not found' });
+  if (sawUnauthorized.length) {
+    return {
+      found: false,
+      needToken: true,
+      gateway: sawUnauthorized[0],
+      hints: [
+        '找到了本机 QQ 桥接（' + sawUnauthorized[0] + '），但它要令牌，没令牌不让连',
+        '去网关自己的设置里复制 accessToken（SnowLuma 是 OneBot HTTP 那栏），粘到下面的「令牌」框',
+        '粘好再点一次「自动找 QQ 桥接」就能连上'
+      ]
+    };
+  }
   return {
     found: false,
     hints: [
@@ -117,6 +183,29 @@ async function connect(opts) {
     selfId = d.selfId;
     nickname = d.nickname;
   }
+  // 用户直接填了 ws:// 地址：不用探测 HTTP，存下来让 WS 桥自己去连。
+  // 收和发都走这一条 WS，只需要一个令牌。
+  if (/^wss?:\/\//i.test(String(gateway || ''))) {
+    const savedWs = writeQQ(cfgFile, (q) => Object.assign(q, {
+      enabled: true,
+      kind: 'onebot-ws',
+      wsUrl: String(gateway).replace(/\/+$/, ''),
+      accessToken: token || q.accessToken || '',
+      token: token || q.token || '',
+      httpUrl: '',
+      gateway: '',
+      self_id: q.self_id || ''
+    }));
+    if (cfg) cfg.qq = savedWs;
+    logLine(dataDir, { dir: 'connect', ok: true, peer: 'ws', mode: 'onebot-ws' });
+    const emptyWs = !((savedWs.allow || []).length);
+    return {
+      ok: true, enabled: true, kind: 'onebot-ws', nickname: 'WS 直连',
+      selfId: savedWs.self_id || '', gateway,
+      needAllow: emptyWs,
+      note: emptyWs ? '白名单还是空的：去 QQ 里发一句，再把你自己的 QQ 号填进「允许私聊的QQ号」，她才会回。' : ''
+    };
+  }
   const r = await probe(gateway, token || '');
   if (!r.ok) {
     let why = r.reason;
@@ -125,13 +214,41 @@ async function connect(opts) {
     logLine(dataDir, { dir: 'connect', ok: false, reason: why });
     return { ok: false, error: '连不上：' + why };
   }
-  const saved = writeQQ(cfgFile, (q) => Object.assign(q, {
+  // 本机要是 SnowLuma 那种 HTTP/WS 双端口的网关，直接帮他配成：
+  // 收消息走 WS（用 WS 的 token）、发消息走 HTTP（用 HTTP 的 token）。
+  // 这层分不清就是新手最大的坑，用户不需要理解它。
+  const locals = localGatewaySecrets();
+  const httpOne = locals.filter((l) => l.role === 'http')[0];
+  const wsOne = locals.filter((l) => l.role === 'ws')[0];
+  const gatewayPort = Number((String(gateway).match(/:(\d+)\/?$/) || [])[1] || 0);
+  const useWs = !!(httpOne && wsOne && gatewayPort && httpOne.port === gatewayPort);
+  const saved = writeQQ(cfgFile, (q) => Object.assign(q, useWs ? {
+    enabled: true,
+    kind: 'onebot-ws',
+    wsUrl: 'ws://127.0.0.1:' + wsOne.port,
+    httpUrl: 'http://127.0.0.1:' + httpOne.port,
+    // WS 连的是 WS 那个服务，令牌必须用 WS 的（探测用的是 HTTP 那个，不能拿来连 WS）
+    accessToken: wsOne.token || token,
+    httpAccessToken: httpOne.token,
+    gateway: 'http://127.0.0.1:' + httpOne.port,
+    token: token || '',
+    self_id: r.selfId || q.self_id || ''
+  } : {
     enabled: true, gateway, token: token || '', self_id: r.selfId || q.self_id || ''
   }));
   saveLast(dataDir, gateway, token || '');
   if (cfg) cfg.qq = saved;
-  logLine(dataDir, { dir: 'connect', ok: true, peer: r.nickname, digest: r.selfId });
-  return { ok: true, enabled: true, nickname: r.nickname || nickname || 'QQ 桥接', selfId: r.selfId || selfId, gateway };
+  const allowEmpty = !((saved.allow || []).length);
+  logLine(dataDir, { dir: 'connect', ok: true, peer: r.nickname, digest: r.selfId, mode: saved.kind || 'onebot-http' });
+  return {
+    ok: true, enabled: true,
+    kind: saved.kind || 'onebot-http',
+    nickname: r.nickname || nickname || 'QQ 桥接',
+    selfId: r.selfId || selfId,
+    gateway,
+    needAllow: allowEmpty,
+    note: allowEmpty ? '白名单还是空的：去 QQ 里用你自己的号给小号发一句，然后在「允许私聊的QQ号」里填上你自己的号，她才会回。' : ''
+  };
 }
 
 function disconnect(opts) {
