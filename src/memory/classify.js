@@ -18,7 +18,7 @@ function isEmotional(text) {
 function classify(text) {
   const t = String(text || '');
   if (/喜欢|讨厌|不爱|爱吃|爱喝|忌口|过敏|不吃|不喝|口味/.test(t)) return 'preference';
-  if (/生日|纪念日|约定|答应|每周|每天|每年|结婚|家人|爸爸|妈妈|老爸|见面|一起/.test(t)) return 'relation';
+  if (/生日|纪念日|约定|答应|每周|每天|每年|结婚|家人|爸爸|妈妈|主人|见面|一起/.test(t)) return 'relation';
   if (/教训|以后别|下次别|记住别|别再|别再犯|踩坑/.test(t)) return 'lesson';
   if (isEmotional(t)) return 'emotional';
   return 'fact';

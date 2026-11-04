@@ -7,7 +7,7 @@
  *   2) 聊天里「记住：我…」也走同一套人称；
  *   3) 问自己的事时，带主语 / 不带主语 / 提到家人的记忆都能送进提示，
  *      不能误判成「记忆里没有这条」；
- *   4) 进提示的记忆一律换成「他」，不能出现「用户/老爸」；
+ *   4) 进提示的记忆一律换成「他」，不能出现「用户/主人」；
  *   5) 问「你叫什么名字」不算问他自己，不该套「没记着」的说法；
  *   6) 多个人名下的同义记忆不能互相顶掉（老王家的猫和大人的猫各叫各的）。
  *
@@ -170,10 +170,10 @@ function mockModel() {
   const sys2 = String(((mock.last() || {}).messages || [])[0].content || '');
   ok(sys2.indexOf('【你是谁】') < 0, '问车位时没带身份说明、不抢答', sys2.slice(-80));
 
-  // 进提示的记忆行里不能出现「用户/老爸」这种第三人称（说明文案里会提到这两个字，不算）
+  // 进提示的记忆行里不能出现「用户/主人」这种第三人称（说明文案里会提到这两个字，不算）
   p = await promptOf('我生日是哪天？');
   const memLines = p.split('\n').filter((l) => /^-\s/.test(l)).join('\n');
-  ok(memLines.length > 0 && !/用户|老爸/.test(memLines), '进提示的记忆行都换成了「他」', memLines.slice(0, 300));
+  ok(memLines.length > 0 && !/用户|主人/.test(memLines), '进提示的记忆行都换成了「他」', memLines.slice(0, 300));
   ok(/他.*生日|生日.*3\s*月\s*14/.test(memLines), '记忆行里说的是他的生日', memLines.slice(0, 200));
 
   try { child.kill(); } catch (e) {}

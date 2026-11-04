@@ -5,7 +5,7 @@
  *   node evals/persona-test.js
  *
  * 验这几件事：
- *   1) 记忆按第三人称存（「用户喜欢…」「老爸喜欢…」），去重和检索才稳；
+ *   1) 记忆按第三人称存（「用户喜欢…」「主人喜欢…」），去重和检索才稳；
  *   2) 拿去给模型用时统一换成「他」——**不能换成「你」**：
  *      系统提示里「你」指的是她本人，换成「你」模型会把他的事当成自己的；
  *   3) 人格里写清「他说的我=他」「你=他」，并禁止叫她「用户」；
@@ -30,15 +30,15 @@ function ok(name, cond, extra) {
 
   ok('「用户」换成「他」', forPrompt('用户喜欢喝冰美式') === '他喜欢喝冰美式', forPrompt('用户喜欢喝冰美式'));
   ok('「用户的」换成「他的」', forPrompt('用户的猫叫团子') === '他的猫叫团子', forPrompt('用户的猫叫团子'));
-  ok('「老爸」也换成「他」', forPrompt('老爸最爱冰美式不加糖') === '他最爱冰美式不加糖', forPrompt('老爸最爱冰美式不加糖'));
+  ok('「主人」也换成「他」', forPrompt('主人最爱冰美式不加糖') === '他最爱冰美式不加糖', forPrompt('主人最爱冰美式不加糖'));
   ok('不会换成「你」（那样她会当成自己的事）', forPrompt('用户喜欢喝冰美式').indexOf('你') < 0, forPrompt('用户喜欢喝冰美式'));
 
   const store = new Store(path.join(TMP, 'memory'));
   store.add({ text: '用户叫小王', kind: 'fact', importance: 3, pinned: true });
-  store.add({ text: '老爸最爱冰美式不加糖', kind: 'preference', importance: 3 });
-  store.add({ text: '我害怕失去老爸', kind: 'emotional', importance: 4 });
+  store.add({ text: '主人最爱冰美式不加糖', kind: 'preference', importance: 3 });
+  store.add({ text: '我害怕失去主人', kind: 'emotional', importance: 4 });
   const r = await recall(store, '我叫什么 爱喝什么 害怕', { topK: 6 });
-  ok('召回块里没有「用户」「老爸」', !/用户|老爸/.test(r.block), r.block);
+  ok('召回块里没有「用户」「主人」', !/用户|主人/.test(r.block), r.block);
   ok('召回块里说的是「他」', /他叫小王/.test(r.block) && !/你叫小王/.test(r.block), r.block);
   ok('分两段：他的事实 / 你俩的回忆', /【关于他的事实】/.test(r.block) && /【你俩之间的回忆片段】/.test(r.block), r.block);
   ok('回忆片段里不把「她的情绪」写成他的事', /我害怕失去/.test(r.block), r.block);

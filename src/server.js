@@ -47,6 +47,11 @@ function loadConfig() {
 }
 
 const cfg = loadConfig();
+// 用户希望她怎么称呼自己：记忆的人称识别按这个认，默认「主人」
+try {
+  const { setOwnerAliases } = require('./util');
+  setOwnerAliases(cfg.ownerAliases);
+} catch (e) {}
 const CONFIG_FILE = process.env.JQ_CONFIG ? path.resolve(ROOT, process.env.JQ_CONFIG) : path.join(ROOT, 'config.json');
 const her = new Her({ root: ROOT, cfg });
 // 上次没提炼成的，服务起来后补一次（失败不丢、可追溯）
@@ -416,7 +421,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true, deleted: id, existed });
   }
 
-  // ---------- 人物表（认人用；默认 owner=老爸） ----------
+  // ---------- 人物表（认人用；默认 owner=主人） ----------
   if (p === '/api/people' && req.method === 'GET') {
     return json(res, 200, { ok: true, people: her.people.list() });
   }

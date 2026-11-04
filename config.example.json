@@ -150,6 +150,8 @@
   },
   "temperature": 0.7,
   "persona": "",
+  "ownerAliases": ["主人", "用户", "你"],
+  "ownerAliasesNote": "她怎么称呼你。记忆是按第三人称存的，判断「这句是不是在说你」就认这几个词——换了叫法记得一起改，不然记忆会认不出来。第一个词会当成你的默认名字。",
   "personaNote": "留空 = 用内置默认人格（src/core.js 的 DEFAULT_PERSONA）；填了这段就整段替换 system 提示词。软件版设置页「人格」那一栏也是改这里，保存后重启服务生效。",
   "voice": {
     "enabled": false,

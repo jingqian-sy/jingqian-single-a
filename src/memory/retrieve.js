@@ -8,27 +8,31 @@
  * 遗忘曲线：按 importance 分档给半衰期，pinned 不掉分。
  *   1 日常流水 14 天 / 2 一般 45 天 / 3 重要 120 天 / 4 钉住 365 天
  */
-const { tokens, cosine, truncate, daysAgo } = require('../util');
+const { tokens, cosine, truncate, daysAgo, ownerAliases, ownerStartRe, escapeRe } = require('../util');
 
 const HALF_LIFE = { 1: 14, 2: 45, 3: 120, 4: 365 };
 
-// 记忆是按第三人称存的（「用户喜欢…」「老爸喜欢…」），但拿去给模型用的时候
+// 记忆是按第三人称存的（「用户喜欢…」「主人喜欢…」），但拿去给模型用的时候
 // 不能换成「你」——系统提示里「你」指的是她本人，模型会把记忆当成自己的事。
 // 所以统一换成「他」（明确指的是跟她说话的那个人）。
+// 称呼是用户在设置里自己定的（ownerAliases），不写死。
 function forPrompt(text) {
-  return String(text || '')
-    .replace(/用户的/g, '他的')
-    .replace(/用户/g, '他')
-    .replace(/老爸的/g, '他的')
-    .replace(/老爸/g, '他');
+  let s = String(text || '');
+  for (const a of ownerAliases()) {
+    const e = escapeRe(a);
+    s = s.replace(new RegExp(e + '的', 'g'), '他的').replace(new RegExp(e, 'g'), '他');
+  }
+  return s;
 }
 
 // 库是混的：有「他的事实」，也有她自己当时的情绪和两人聊天的片段。
 // 分开喂，模型才不会把她的回忆当成关于他的事实乱用。
 function kindOf(text) {
   const t = String(text || '').trim();
-  if (/^用户|^老爸|^他(的|叫|喜欢|讨厌|爱|在|是|有|住)/.test(t)) return 'his';
+  // 先判她自己：称呼列表里可能带「你」，但「你…」开头的多半是她自己的话，
+  // 不能因为命中称呼就当成他的事实
   if (/^我|^你/.test(t)) return 'self';
+  if (ownerStartRe().test(t) || /^他(的|叫|喜欢|讨厌|爱|在|是|有|住)/.test(t)) return 'his';
   return 'echo';
 }
 
@@ -142,7 +146,7 @@ async function recall(store, query, opts) {
   if (hits.length) store.markUsed(hits.map((h) => h.id));
 
   // 分两类拼：他的事实优先；她自己的回忆/聊天片段单独一段，并说清「不是事实」
-  // 「他的事实」不能只看开头有没有「用户/老爸」：主人名下、没写主语的事实（「周末去打球」）
+  // 「他的事实」不能只看开头有没有「用户/主人」：主人名下、没写主语的事实（「周末去打球」）
   // 也得算他的，不然问起来会被当成她自己的事，答「没记着」。
   const hisLike = (h) => kindOf(h.text) === 'his'
     || ((h.person || 'owner') === 'owner' && kindOf(h.text) !== 'self' && !/^她/.test(String(h.text || '').trim()));

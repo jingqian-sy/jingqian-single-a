@@ -2813,6 +2813,7 @@ namespace JingqianShell
         FlatBtn btnTestProv, btnSpeakTest;
         FlatBtn btnPickModel;
         TextBox txtPersona;
+        TextBox txtOwnerAliases;
         FlatBtn btnResetPersona;
         Label lblProviderHint;
         CheckBox chkVoice;
@@ -3276,18 +3277,18 @@ namespace JingqianShell
             txtPersona.BackColor = Color.White;
             txtPersona.Font = Theme.Ui(9.5f, false);
             txtPersona.MaxLength = 8000;   // 和服务的上限一致：太长会把上下文撑爆
-            txtPersona.SetBounds(Dpi.X(14), Dpi.X(1278), Dpi.X(596), Dpi.X(120));
+            txtPersona.SetBounds(Dpi.X(14), Dpi.X(1278), Dpi.X(596), Dpi.X(92));
             txtPersona.AccessibleName = "cfgPersona";
             contentPanel.Controls.Add(txtPersona);
             lblPersonaCount = new Label();
             lblPersonaCount.AutoSize = false;
             lblPersonaCount.Font = Theme.Ui(8.5f, false);
             lblPersonaCount.ForeColor = Theme.Dim;
-            lblPersonaCount.SetBounds(Dpi.X(114), Dpi.X(1406), Dpi.X(496), Dpi.X(20));
+            lblPersonaCount.SetBounds(Dpi.X(114), Dpi.X(1376), Dpi.X(496), Dpi.X(20));
             contentPanel.Controls.Add(lblPersonaCount);
             txtPersona.TextChanged += delegate { UpdatePersonaCount(); };
 
-            btnResetPersona = SmallBtn("恢复默认", 14, 1408, 92, false);
+            btnResetPersona = SmallBtn("恢复默认", 14, 1380, 92, false);
             btnResetPersona.Click += delegate
             {
                 txtPersona.Text = "";
@@ -3299,11 +3300,16 @@ namespace JingqianShell
             ph.Font = Theme.Ui(8.5f, false);
             ph.ForeColor = Theme.Dim;
             ph.Text = "内置默认：叫鲸倩、短句口语、不列清单、不说自己是什么模型、不知道就说不确定。";
-            ph.SetBounds(Dpi.X(14), Dpi.X(1436), Dpi.X(596), Dpi.X(24));
+            ph.SetBounds(Dpi.X(14), Dpi.X(1408), Dpi.X(596), Dpi.X(24));
             contentPanel.Controls.Add(ph);
 
+            // 她怎么称呼你：记忆是按第三人称存的，认出「这句在说你」全靠这个词表
+            Cap("她怎么称呼你（逗号分隔，第一个当默认名字）", 14, 1436);
+            txtOwnerAliases = Box(14, 1454, 380);
+            txtOwnerAliases.AccessibleName = "cfgOwnerAliases";
+
             // ---------- 语音 ----------
-            Section("语音", 14, 1470);
+            Section("语音", 14, 1492);
             Hint("朗读她用系统自带的声音，不联网、不要 key；麦克风听写也是本机识别（中文），说完一段自动断句。", 14, 1498);
 
             chkVoice = new CheckBox();
@@ -3793,6 +3799,17 @@ namespace JingqianShell
                 if (txtQQAllow != null) txtQQAllow.Text = qqAllowText;
                 UpdateQQState();
                 txtPersona.Text = cfg.ContainsKey("persona") ? Convert.ToString(cfg["persona"]) : "";
+                if (txtOwnerAliases != null)
+                {
+                    string oa = "";
+                    if (cfg.ContainsKey("ownerAliases") && cfg["ownerAliases"] is object[])
+                    {
+                        List<string> ol = new List<string>();
+                        foreach (object o in (object[])cfg["ownerAliases"]) { string v = Convert.ToString(o); if (v.Trim().Length > 0) ol.Add(v.Trim()); }
+                        oa = string.Join(",", ol.ToArray());
+                    }
+                    txtOwnerAliases.Text = oa.Length > 0 ? oa : "主人,用户,你";
+                }
                 UpdatePersonaCount();
                 // 语音：列出本机声音，选中配置里那家（没配就选中文声音）
                 bool vOn = false;
@@ -4324,6 +4341,18 @@ namespace JingqianShell
                 rb["order"] = order;
                 body["route"] = rb;
                 body["persona"] = txtPersona.Text.Trim();
+                // 她怎么称呼你：逗号分隔；空着就用默认三个词
+                List<object> oaList = new List<object>();
+                if (txtOwnerAliases != null)
+                {
+                    foreach (string one in txtOwnerAliases.Text.Split(','))
+                    {
+                        string v = one.Trim();
+                        if (v.Length > 0 && !oaList.Contains(v)) oaList.Add(v);
+                    }
+                }
+                if (oaList.Count == 0) { oaList.Add("主人"); oaList.Add("用户"); oaList.Add("你"); }
+                body["ownerAliases"] = oaList.ToArray();
                 Dictionary<string, object> vb = new Dictionary<string, object>();
                 vb["enabled"] = chkVoice.Checked;
                 vb["voice"] = (cmbVoice.SelectedItem != null) ? cmbVoice.SelectedItem.ToString().Split('|')[0].Trim() : "";

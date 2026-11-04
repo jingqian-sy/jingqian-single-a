@@ -106,7 +106,23 @@ function readJsonl(file) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+/*
+ * 用户希望她怎么称呼自己（「主人」「老板」「你」……）。
+ * 记忆是按第三人称存的，判断「这句话是不是在说他」要认这些词；
+ * 写死成某个称呼的话，用户一改叫法记忆就认不出来了，所以做成可配置。
+ */
+let _ownerAliases = ['主人', '用户', '你'];
+function setOwnerAliases(list) {
+  const arr = (Array.isArray(list) ? list : []).map((x) => String(x || '').trim()).filter(Boolean);
+  if (arr.length) _ownerAliases = Array.from(new Set(arr));
+}
+function ownerAliases() { return _ownerAliases.slice(); }
+function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+// 匹配「主人」「你」「用户…」开头的正则（每次重建，称呼改了下一次就生效）
+function ownerStartRe() { return new RegExp('^(' + _ownerAliases.map(escapeRe).join('|') + ')'); }
+
 module.exports = {
   nowIso, uid, readJson, writeJson, appendJsonl, ensureDir,
-  daysAgo, tokens, tokenCount, cosine, sim, truncate, normalizeFact, readJsonl, sleep
+  daysAgo, tokens, tokenCount, cosine, sim, truncate, normalizeFact, readJsonl, sleep,
+  setOwnerAliases, ownerAliases, ownerStartRe, escapeRe
 };

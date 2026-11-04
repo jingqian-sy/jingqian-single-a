@@ -3,7 +3,7 @@
  * 人物表：认人用的（从 DSH 记忆服务的 people 表搬来的模式）
  *
  * data/memory/people.json 里存一个人一条：
- *   { id, name, kind, relation, weight, aliases: ['老爸','管理员'], created_at }
+ *   { id, name, kind, relation, weight, aliases: ['主人','管理员'], created_at }
  *
  * 用途：
  *   1) 记忆条目上的 person 指向这里的 id（默认 owner）
@@ -11,7 +11,7 @@
  *   3) 以后按人检索、按人给权重（weight）都有地方挂
  */
 const path = require('path');
-const { readJson, writeJson, ensureDir, nowIso } = require('../util');
+const { readJson, writeJson, ensureDir, nowIso, ownerAliases } = require('../util');
 
 class People {
   constructor(dir) {
@@ -25,16 +25,17 @@ class People {
 
   save() { writeJson(this.file, this.data); }
 
-  // 老板娘先占个位：owner 永远在，别名里带上常见叫法
+  // 老板娘先占个位：owner 永远在，别名里带上常见叫法（称呼跟着用户的设置走）
   seedOwner() {
     if (this.data.items.some((x) => x.id === 'owner')) return;
+    const aliases = ownerAliases();
     this.data.items.push({
       id: 'owner',
-      name: '老爸',
+      name: aliases[0] || '主人',
       kind: 'owner',
-      relation: '主人',
+      relation: aliases[0] || '主人',
       weight: 1,
-      aliases: ['老爸', '主人', '管理员'],
+      aliases: aliases,
       created_at: nowIso()
     });
     this.save();

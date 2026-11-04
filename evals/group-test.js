@@ -2,13 +2,13 @@
 /*
  * 群聊/多人场景用例（本机假模型，不联网、不碰真实记忆）
  *
- * 模拟：老王、小李在群里说话（带 speaker），老爸私聊。
+ * 模拟：老王、小李在群里说话（带 speaker），主人私聊。
  * 验这些：
- *   1) 群友说「我…」按他名字存、挂在他名下，不写成老爸的事；
- *   2) 老爸问自己的事时，不会把群友的事当成自己的；
+ *   1) 群友说「我…」按他名字存、挂在他名下，不写成主人的事；
+ *   2) 主人问自己的事时，不会把群友的事当成自己的；
  *   3) 问「老王喜欢什么」能从【关于别人】里找到；
  *   4) 群友自己问「我喜欢什么」时，提示里点明说话人是谁，不套「问他本人」的说法；
- *   5) 群里各人的事不串（小李的生日不会跑到老爸名下）。
+ *   5) 群里各人的事不串（小李的生日不会跑到主人名下）。
  *
  *   node evals/group-test.js
  */
@@ -92,7 +92,7 @@ function mockModel() {
   await post('/api/people', { name: '老王', aliases: ['老王'], relation: '群友' });
   await post('/api/people', { name: '小李', aliases: ['小李'], relation: '群友' });
 
-  // 群里两条、老爸私聊一条
+  // 群里两条、主人私聊一条
   await say('记住：我喜欢打篮球', { id: '1001', name: '老王' });
   await say('记住：我下周三生日', { id: '1002', name: '小李' });
   await say('记住：我喜欢喝咖啡', null);
@@ -104,7 +104,7 @@ function mockModel() {
   const owner = items.find((x) => /用户.*喝咖啡/.test(String(x.text)));
   ok(wang && (wang.person || 'owner') !== 'owner', '群友的事挂在他自己名下', JSON.stringify(wang && { text: wang.text, person: wang.person }));
   ok(li && /^小李/.test(li.text), '另一个群友的事也按名字存', JSON.stringify(li && li.text));
-  ok(owner && /^用户/.test(owner.text), '老爸自己的事还是「用户…」', JSON.stringify(owner && owner.text));
+  ok(owner && /^用户/.test(owner.text), '主人自己的事还是「用户…」', JSON.stringify(owner && owner.text));
 
   const section = (text, name) => {
     const i = text.indexOf('【' + name + '】');
@@ -114,10 +114,10 @@ function mockModel() {
     return j < 0 ? rest : rest.slice(0, j);
   };
 
-  // 1) 老爸问自己：不能把老王的篮球当成自己的
+  // 1) 主人问自己：不能把老王的篮球当成自己的
   await say('我喜欢打篮球吗？', null);
   let p = promptOf();
-  ok(!/篮球/.test(section(p, '关于他的事实')), '老爸问自己时，群友的篮球不在他的事实里', section(p, '关于他的事实').slice(0, 200));
+  ok(!/篮球/.test(section(p, '关于他的事实')), '主人问自己时，群友的篮球不在他的事实里', section(p, '关于他的事实').slice(0, 200));
   ok(!/记忆里没有这条/.test(p) || !/篮球/.test(p), '不会把群友的事当成「有」', p.slice(0, 200));
 
   // 2) 问老王：应该从【关于别人】里出现
@@ -132,10 +132,10 @@ function mockModel() {
   ok(/篮球/.test(p), '老王问自己时他的事在提示里', p.slice(0, 260));
   ok(!/记忆里没有这条/.test(p), '不套「记忆里没有这条」的说法', p.slice(0, 200));
 
-  // 4) 小李的生日不串到老爸名下
+  // 4) 小李的生日不串到主人名下
   await say('我生日是哪天？', null);
   p = promptOf();
-  ok(!/下周三/.test(section(p, '关于他的事实')), '小李的生日没跑到老爸名下', section(p, '关于他的事实').slice(0, 200));
+  ok(!/下周三/.test(section(p, '关于他的事实')), '小李的生日没跑到主人名下', section(p, '关于他的事实').slice(0, 200));
 
   // 5) 问小李的生日能找到
   await say('小李生日是哪天？', null);

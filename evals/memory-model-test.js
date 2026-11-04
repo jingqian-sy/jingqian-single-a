@@ -71,7 +71,7 @@ function ok(name, cond, extra) {
   // 人物表：认人
   const people = new People(path.join(TMP, 'people'));
   ok('默认有 owner', people.list().some((p) => p.id === 'owner'), people.list().map((p) => p.id));
-  ok('按别名认人', (people.whoSaid('老爸今天累了') || {}).id === 'owner', people.whoSaid('老爸今天累了'));
+  ok('按别名认人', (people.whoSaid('主人今天累了') || {}).id === 'owner', people.whoSaid('主人今天累了'));
   people.upsert({ name: '小李', aliases: ['小李', '阿李'], relation: '朋友' });
   ok('新人物能认出来', (people.whoSaid('阿李来了') || {}).name === '小李', people.whoSaid('阿李来了'));
   ok('陌生人不会被乱认', people.whoSaid('今天天气不错') === null, people.whoSaid('今天天气不错'));

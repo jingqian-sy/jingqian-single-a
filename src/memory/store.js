@@ -13,7 +13,7 @@
  */
 const path = require('path');
 const fs = require('fs');
-const { uid, nowIso, readJson, writeJson, ensureDir, normalizeFact } = require('../util');
+const { uid, nowIso, readJson, writeJson, ensureDir, normalizeFact, ownerAliases, ownerStartRe, escapeRe } = require('../util');
 
 const KINDS = ['fact', 'preference', 'relation', 'emotional', 'lesson'];
 
@@ -46,8 +46,15 @@ class Store {
   get(id) { return this.data.items.find((x) => x.id === id) || null; }
 
   // 同一件事换个说法（「用户喜欢X」/「他喜欢X」）算冲突：只留说话人那条
+  // 称呼是用户自己定的（ownerAliases），这里不写死
   subjectlessKey(t) {
-    return normalizeFact(String(t || '').replace(/^(用户|老爸|他的?|我的?|她)/, ''));
+    let s = String(t || '');
+    for (const a of ownerAliases()) {
+      const re = new RegExp('^(' + escapeRe(a) + ')');
+      if (re.test(s)) { s = s.replace(re, ''); break; }
+    }
+    s = s.replace(/^(他的?|我的?|她)/, '');
+    return normalizeFact(s);
   }
 
   add(input) {
@@ -63,15 +70,15 @@ class Store {
       this.save();
       return dup;
     }
-    // 冲突检查：同义但主语不同，只留说「用户/老爸」那条。
+    // 冲突检查：同义但主语不同，只留说「用户/主人」那条。
     // 只在同一个人名下比：老王家的猫和大人的猫都叫团子，不能互相顶掉。
     const newPerson = (input && input.person) || 'owner';
     const sKey = this.subjectlessKey(text);
     const conflict = this.data.items.find((x) => x.status !== 'archived'
       && (x.person || 'owner') === newPerson
       && this.subjectlessKey(x.text) === sKey);
-    const hisNow = /^(用户|老爸)/.test(text);
-    if (conflict && hisNow && !/^(用户|老爸)/.test(conflict.text)) {
+    const hisNow = ownerStartRe().test(text);
+    if (conflict && hisNow && !ownerStartRe().test(conflict.text)) {
       conflict.status = 'archived';
       conflict.merged_into = null;
     } else if (conflict && !hisNow) {
