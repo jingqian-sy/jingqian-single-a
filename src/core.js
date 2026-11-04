@@ -23,6 +23,7 @@ const { classify, scoreImportance } = require('./memory/classify');
 const { consolidate } = require('./memory/consolidate');
 const { Tools } = require('./tools');
 const { PluginHost } = require('./plugins');
+const { referenceGate } = require('./gates');
 const { McpClient } = require('./mcp-client');
 const safety = require('./safety');
 const sandbox = require('./sandbox');
@@ -934,6 +935,16 @@ class Her {
       captured: captured ? captured.id : null,
       plan: planText || ''
     };
+    // 引用闸（2.0）：她说生成到/保存到某个路径了，先验一下真有没有。
+    // 查出来不改答案，只在后面补一句——改了反而前后矛盾。
+    try {
+      const g = referenceGate(reply);
+      if (g.flagged.length) {
+        reply = g.reply;
+        stats.reference_flags = g.flagged;
+      }
+    } catch (e) {}
+
     appendJsonl(path.join(this.dataDir, 'turns.log'), Object.assign({ ts: nowIso(), session: sessionId, text: truncate(text, 200) }, stats));
     return { reply, stats, memory: recallRes.hits, trace };
   }
