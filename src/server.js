@@ -24,6 +24,7 @@ const qqConnect = require('./qq/connect');
 const attach = require('./attach');
 const { NAME_RE, copyDir } = require('./plugins');
 const openaiApi = require('./openai-api');
+const envProbe = require('./env');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -294,6 +295,13 @@ async function handleApi(req, res, url) {
   }
 
   if (p === '/api/selfcheck') return json(res, 200, her.selfcheck());
+
+  // 这台机器能跑什么（2.0 · 泛用）：显卡、内存、有没有本地模型、配了几个云端 key
+  if (p === '/api/env') {
+    if (!isLocal(req)) return denyRemote(res);
+    try { return json(res, 200, Object.assign({ ok: true }, envProbe.probe(cfg))); }
+    catch (e) { return json(res, 500, { ok: false, error: e.message }); }
+  }
 
   // ---------- 用这把 key 能用的模型（接上密钥先问用哪个模型） ----------
   if (p === '/api/models' && req.method === 'POST') {
