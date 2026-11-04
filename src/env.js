@@ -55,18 +55,30 @@ function probe(cfg) {
   };
 }
 
-// 三套预设：省心（全云端）/ 均衡（本地+云端）/ 质量（云端优先）
+// 三套预设：省心（全云端）/ 均衡（省着用，分档）/ 质量（都用好的）
 function recommend(e) {
   if (!e.gpu.found && !e.localModel) {
-    return { name: '省心', reason: '没有独显也没装本地模型，全靠云端最省事', route: { mode: 'cloud-first', autoTier: true } };
+    return {
+      name: '省心',
+      reason: '没有独显也没装本地模型，全靠云端最省事',
+      route: { mode: 'cloud-first', autoTier: false }
+    };
   }
   if (e.gpu.found && e.gpu.vramGB >= 8 && e.localModel) {
-    return { name: '均衡', reason: '显存 ' + e.gpu.vramGB + 'GB 够跑本地模型，简单活本地干、硬活上云', route: { mode: 'cloud-first', autoTier: true } };
+    return {
+      name: '均衡',
+      reason: '显存 ' + e.gpu.vramGB + 'GB 够跑本地模型，简单活本地干、硬活上云',
+      route: { mode: 'cheap-first', autoTier: true }
+    };
   }
   if (e.cloudKeyed >= 1) {
-    return { name: '质量', reason: '有云端 key，难的直接走云端质量最好', route: { mode: 'cloud-first', autoTier: true } };
+    return {
+      name: '质量',
+      reason: '有云端 key，难的直接走云端质量最好',
+      route: { mode: 'cloud-first', autoTier: false }
+    };
   }
-  return { name: '省心', reason: '条件有限，先用最稳的一套', route: { mode: 'cheap-first', autoTier: true } };
+  return { name: '省心', reason: '条件有限，先用最稳的一套', route: { mode: 'cloud-first', autoTier: false } };
 }
 
 module.exports = { probe, recommend, detectGpu, detectLocalModel };

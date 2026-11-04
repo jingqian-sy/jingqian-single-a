@@ -463,9 +463,13 @@ class Her {
     const sum = this.loadSummary(this._curSession);
     if (sum) parts.push('【之前聊到的】\n' + forPrompt(sum));
     if (recallRes.block) {
+      // 上下文预算（2.0）：记忆块太大就把小模型挤没了，超了就截一段并说明还有剩的
+      const memLimit = Math.max(500, Number(this.cfg.memory && this.cfg.memory.blockChars) || 3000);
+      let block = String(recallRes.block);
+      if (block.length > memLimit) block = block.slice(0, memLimit) + '\n（记忆还有更多，先看这些）';
       parts.push('【参考记忆】（下面分两段：「关于他的事实」里的「他」就是跟你说话的那个人；'
         + '「回忆片段」是你俩之间发生过的话和情绪，不是关于他的事实，别照搬。'
-        + '回他的时候用「你」称呼他，别对他说「用户」两个字，也别把他的事说成你自己的）\n' + recallRes.block);
+        + '回他的时候用「你」称呼他，别对他说「用户」两个字，也别把他的事说成你自己的）\n' + block);
     }
     const ev = this.events.block(5);
     if (ev) parts.push('【事件时间轴】\n' + forPrompt(ev));

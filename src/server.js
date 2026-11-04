@@ -304,6 +304,28 @@ async function handleApi(req, res, url) {
     catch (e) { return json(res, 500, { ok: false, error: e.message }); }
   }
 
+  // 应用某套预设：把 route 写回配置（用户点一下才动，不自动改）
+  if (p === '/api/env/apply' && req.method === 'POST') {
+    if (!isLocal(req)) return denyRemote(res);
+    const body = await readBody(req);
+    const info = envProbe.probe(cfg);
+    const preset = String(body.preset || info.preset.name);
+    const map = {
+      '省心': { mode: 'cloud-first', autoTier: false },
+      '均衡': { mode: 'cheap-first', autoTier: true },
+      '质量': { mode: 'cloud-first', autoTier: false }
+    };
+    const target = map[preset];
+    if (!target) return json(res, 400, { ok: false, error: '不认识的预设：' + preset + '（只有 省心 / 均衡 / 质量）' });
+    const cur = readConfigFile() || {};
+    cur.route = Object.assign({}, cur.route || {}, { mode: target.mode, autoTier: target.autoTier });
+    try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(cur, null, 2), 'utf8'); }
+    catch (e) { return json(res, 500, { ok: false, error: '写 config.json 失败：' + e.message }); }
+    cfg.route = cur.route;
+    try { her.router.setRoute(cur.route); } catch (e) {}
+    return json(res, 200, { ok: true, preset: preset, route: cur.route, applied: true });
+  }
+
   // 这段时间到底怎么样（2.0 · 观测）：调了几次、缓存接了几次、花了多少、哪儿被标了
   if (p === '/api/stats/detail') {
     if (!isLocal(req)) return denyRemote(res);

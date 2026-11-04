@@ -116,6 +116,15 @@ function chunkTools(res, calls, meta) {
   res.end();
 }
 
+// 并发串行：壳可能同时发两个请求（正文 + 给会话起标题），
+// 它们共用同一个临时会话，并行会互相踩历史，排队一个个来最稳。
+let chain = Promise.resolve();
+function serialize(fn) {
+  const p = chain.then(fn, fn);
+  chain = p.catch(() => {});
+  return p;
+}
+
 async function handle(req, res, url, ctx) {
   const her = ctx.her;
   if (!ctx.isLocal(req)) {
@@ -203,7 +212,7 @@ async function handle(req, res, url, ctx) {
     let toolCalls = null;
     try {
       const r = await Promise.race([
-        her.chat(input, chatOpts),
+        serialize(() => her.chat(input, chatOpts)),
         new Promise((_, rej) => setTimeout(() => rej(new Error('等了 ' + Math.round(timeoutMs / 1000) + ' 秒还没答上来')), timeoutMs))
       ]);
       reply = String((r && r.reply) || '');
