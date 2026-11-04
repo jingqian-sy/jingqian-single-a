@@ -25,6 +25,7 @@ const attach = require('./attach');
 const { NAME_RE, copyDir } = require('./plugins');
 const openaiApi = require('./openai-api');
 const envProbe = require('./env');
+const observe = require('./observe');
 const { readJson, ensureDir, truncate } = require('./util');
 
 const ROOT = path.join(__dirname, '..');
@@ -301,6 +302,15 @@ async function handleApi(req, res, url) {
     if (!isLocal(req)) return denyRemote(res);
     try { return json(res, 200, Object.assign({ ok: true }, envProbe.probe(cfg))); }
     catch (e) { return json(res, 500, { ok: false, error: e.message }); }
+  }
+
+  // 这段时间到底怎么样（2.0 · 观测）：调了几次、缓存接了几次、花了多少、哪儿被标了
+  if (p === '/api/stats/detail') {
+    if (!isLocal(req)) return denyRemote(res);
+    try {
+      const d = Number(url.searchParams.get('days') || 7);
+      return json(res, 200, Object.assign({ ok: true }, observe.summary(her.dataDir, { days: d }), { cache: her.cache.stats() }));
+    } catch (e) { return json(res, 500, { ok: false, error: e.message }); }
   }
 
   // ---------- 用这把 key 能用的模型（接上密钥先问用哪个模型） ----------
